@@ -142,9 +142,13 @@ Configure and initialize a HSDir network:
 
 ```
 ./chutney init --net hs-v3
-./chutney configure
-./chutney start
-./chutney wait_for_bootstrap #Be patient untill all nodes return SUCCESS
+./chutney bootstrap
 ./chutney status
 ./chutney verify
+```
+
+Next lets get the name of the HSDir for the python program to work:
+
+```
+cat net/nodes.*/network.json | grep hs_hostname | tail -1
 ```
