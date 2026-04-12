@@ -1,39 +1,39 @@
 
 Tasks:
 
-    - Private network:
+Tasks - Private network:
 
-        - [x] Set-up private Tor Network Chutney
+- [x] Set-up private Tor Network Chutney
 
-        - [x] Parse Chutney to correctly stablish and verify connections to HSDirs
+- [x] Parse Chutney to correctly stablish and verify connections to HSDirs
 
-        - [x] Build python program - Chutney based
+- [x] Build python program - Chutney based
 
-        - [ ] Get cert-key of HS to decrypt and extract descriptor content - Chutney based
+- [ ] Get cert-key of HS to decrypt and extract descriptor content - Chutney based
 
-        - [ ] Set-up private Tor Network Shadow
+- [ ] Set-up private Tor Network Shadow
 
-        - [ ] Parse Shadow to correctly stablish and verify connections to HSDirs
+- [ ] Parse Shadow to correctly stablish and verify connections to HSDirs
 
-        - [ ] Build python program - Shadow based
+- [ ] Build python program - Shadow based
 
-        - [ ] Get cert-key of HS to decrypt and extract descriptor content - Shadow based
+- [ ] Get cert-key of HS to decrypt and extract descriptor content - Shadow based
 
-        - [ ] Build-reafactor python programs (Chutney, Shadow) for analysis and data collection - JSON based files
+- [ ] Build-reafactor python programs (Chutney, Shadow) for analysis and data collection - JSON based files
 
-    - Real network:
+Tasks - Real network:
 
-        - [ ] Open own HSDir over real Tor Network
+- [ ] Open own HSDir over real Tor Network
 
-        - [ ] Build python program [1] - test-phase
+- [ ] Build python program [1] - test-phase
 
-        - [ ] Analyze owned HSDir over real Tor Network - test-phase
+- [ ] Analyze owned HSDir over real Tor Network - test-phase
 
-        - [ ] Modify program after test-phase and redo for analysis
+- [ ] Modify program after test-phase and redo for analysis
 
-        - [ ] Unlimited running over real Tor Network and data collection
+- [ ] Unlimited running over real Tor Network and data collection
 
-        - [ ] Build analysis model - async from workflow
+- [ ] Build analysis model - async from workflow
 
 [1] Build python program:
 
