@@ -1,30 +1,41 @@
+
 Tasks:
 
-- [x] Set-up private Tor Network Chutney
+    - Private network:
 
-- [ ] Parse Chutney to correctly stablish and verify connections to HSDirs
+        - [x] Set-up private Tor Network Chutney
 
-- [ ] Build python program - Chutney based
+        - [x] Parse Chutney to correctly stablish and verify connections to HSDirs
 
-- [ ] Set-up private Tor Network Shadow
+        - [x] Build python program - Chutney based
 
-- [ ] Parse Shadow to correctly stablish and verify connections to HSDirs
+        - [ ] Get cert-key of HS to decrypt and extract descriptor content - Chutney based
 
-- [ ] Build python program - Shadow based
+        - [ ] Set-up private Tor Network Shadow
 
-- [ ] Build-reafactor python program
+        - [ ] Parse Shadow to correctly stablish and verify connections to HSDirs
 
-- [ ] Open own HSDir over real Tor Network
+        - [ ] Build python program - Shadow based
 
-- [ ] Analyze owned HSDir over real Tor Network - test-phase
+        - [ ] Get cert-key of HS to decrypt and extract descriptor content - Shadow based
 
-- [ ] Modify program if necessary after test-phase and redo
+        - [ ] Build-reafactor python programs (Chutney, Shadow) for analysis and data collection - JSON based files
 
-- [ ] Unlimited running over real Tor Network and data collection
+    - Real network:
 
-- [ ] Build analysis model
+        - [ ] Open own HSDir over real Tor Network
 
-Build python program:
+        - [ ] Build python program [1] - test-phase
+
+        - [ ] Analyze owned HSDir over real Tor Network - test-phase
+
+        - [ ] Modify program after test-phase and redo for analysis
+
+        - [ ] Unlimited running over real Tor Network and data collection
+
+        - [ ] Build analysis model - async from workflow
+
+[1] Build python program:
 
 - [ ] Data collection
 

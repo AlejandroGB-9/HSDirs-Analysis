@@ -29,16 +29,5 @@ echo "Setting up HSDir network via Chutney"
 
 ./chutney verify
 
-# Verify nodes are running
-ps aux | grep "[t]or" | grep chutney
-
-# Check if port 9009 is now listening
-ss -tlnp | grep 9009
-
-sleep 10
-
-# Find the active network directory (latest timestamp)
-ls -lt net/nodes.* | head -1
-
-# Check logs from that directory
-tail -100 net/nodes.*/*/tor.log
+echo "Onion service address:"
+cat net/nodes.*/network.json | grep hs_hostname | tail -1
