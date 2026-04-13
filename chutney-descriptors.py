@@ -7,6 +7,7 @@ Fetch HSDir descriptors with Stem - Chutney network.
 import os
 import time
 import stem
+import traceback
 from stem.control import Controller
 from stem.descriptor.hidden_service import HiddenServiceDescriptorV3
 
@@ -37,36 +38,61 @@ def main():
         controller = Controller.from_port(port=CONTROL_PORT)
         print("\nAuthenticating client ...")
         controller.authenticate()
-        #controller.authenticate_cookie(COOKIE_PATH)
         print("Authenticated successfully ...")
         
         print(f"Fetching descriptor for target onion HS @ {TARGET_ONION}...")
-        desc = controller.get_hidden_service_descriptor(TARGET_ONION)
+        desc = controller.get_hidden_service_descriptor(TARGET_ONION) #Only returns V2 type by design even if mismatch with version (V3), requires manual re-parse
         
         if desc:
-            print("\n" + "=" * 60)
+            print("\n" + "=" * 40)
             print("Descriptor Retrieved")
-            print("=" * 60)
-            print("\nDescriptor Content:\n")
-            print(desc)
+            print("=" * 40)
+
+            print()
+
+            if hasattr(desc, 'get_bytes'):
+                raw_text = desc.get_bytes().decode('utf-8')
+            else:
+                raw_text = str(desc)
+                        
+            # Re-parse as V3 (bypassing controller's V2-only parser)
+            print("\n[INFO] Re-parsing as HiddenServiceDescriptorV3...\n")
+            desc = HiddenServiceDescriptorV3(raw_text.encode('utf-8'))
+
+            print(f"@ Descriptor Content:\n{desc}")
             
-            print("\n" + "=" * 60)
+            try:
+                print("=" * 40)
+                print("Decrypting Descriptor...")
+                print("=" * 40)
+                decpt = desc.decrypt(TARGET_ONION)
+                print("\n@ Decrypted Descriptor - Superencrypted:")
+                print(decpt)
+
+            except Exception as decrypt_error:
+                print(f"\n[ERROR] Failed to decrypt descriptor: {decrypt_error}")
+                traceback.print_exc()
+                return 1
+            
+            print("=" * 40)
             return 0
+
         else:
             print("\nDescriptor not found. Try waiting for a minute.")
+            traceback.print_exc()
             return 1
                 
     except stem.SocketError as e:
-        print(f"\nConnection Failed: {e}")
+        print(f"\n[ERROR] Connection Failed: {e}")
         print("\tRun './chutney status' to check if nodes are running.")
+        traceback.print_exc()
         return 1
     except stem.connection.AuthenticationFailure as e:
-        print(f"\nAuthentication Failed: {e}")
-        print("\tCheck cookie file permissions: chmod 644 " + COOKIE_PATH)
+        print(f"\n[ERROR] Authentication Failed: {e}")
+        traceback.print_exc()
         return 1
     except Exception as e:
-        print(f"\nUnexpected Error: {e}")
-        import traceback
+        print(f"\n[ERROR] Unexpected Error: {e}")
         traceback.print_exc()
         return 1
 

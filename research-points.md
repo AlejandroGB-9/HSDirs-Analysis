@@ -1,6 +1,3 @@
-
-Tasks:
-
 Tasks - Private network:
 
 - [x] Set-up private Tor Network Chutney
