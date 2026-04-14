@@ -14,8 +14,7 @@ def decode_base64_field(value: str) -> bytes:
 
 def parse_introduction_point_blob(blob_b64: str) -> Dict[str, Any]:
     """
-    Parses a v3 Introduction Point blob.
-    Supports both 62-byte (21-byte hash) and 65-byte (24-byte hash) variants.
+    Parse v3 Introduction Point blob; Supports both 62-byte (21-byte hash) and 65-byte (24-byte hash) variants.
     """
     try:
         data = base64.b64decode(blob_b64)
@@ -44,7 +43,6 @@ def parse_introduction_point_blob(blob_b64: str) -> Dict[str, Any]:
     ip_str = ".".join(str(b) for b in ip_bytes)
 
     return {
-        "length": length,
         "version_flags": version_flags,
         "ip_address": ip_str,
         "port": port,
@@ -62,18 +60,19 @@ def parse_ed25519_cert(cert_block: str) -> Dict[str, Any]:
     try:
         data = base64.b64decode(content)
         return {
-            "raw_hex": data.hex(),
-            "length_bytes": len(data),
-            "note": "Full signature verification requires the signing key."
+            "cert_raw_base64": content,
+            "cert_raw_hex": data.hex(),
+            "cert_length_bytes": len(data)
+            #"note": "[PENDING-IF] Signature verification via signing key."
         }
     except Exception as e:
         return {"error": str(e)}
 
-def parse_descriptor_v3(text: str) -> Dict[str, Any]:
-    lines = text.strip().split('\n')
-    output = {
-        "version": "V3",
-        "metadata": {},
+def parse_metadata_descriptor(lines: list) -> Dict[str, Any]:
+
+    output_metadata = {
+        "create2_formats": None,
+        "flow_control": None,
         "introduction_points": []
     }
     current_ip = None
@@ -106,20 +105,19 @@ def parse_descriptor_v3(text: str) -> Dict[str, Any]:
             continue
 
         if line.startswith("create2-formats"):
-            output["metadata"]["create2-formats"] = line.split(None, 1)[1]
+            output_metadata["create2_formats"] = line.split(None, 1)[1]
         elif line.startswith("flow-control"):
-            output["metadata"]["flow-control"] = line.split(None, 1)[1]
+            output_metadata["flow_control"] = line.split(None, 1)[1]
         elif line.startswith("introduction-point"):
             if current_ip:
-                output["introduction_points"].append(current_ip)
+                output_metadata["introduction_points"].append(current_ip)
             
             val = line.split(None, 1)[1]
             # DECODE THE BLOB HERE
             decoded_info = parse_introduction_point_blob(val)
-            print(f"Decoded info: {decoded_info}")
             
             current_ip = {
-                "index": len(output["introduction_points"]) + 1,
+                "index": len(output_metadata["introduction_points"]) + 1,
                 "raw_value": val,
                 "routing_info": decoded_info, # Renamed to 'routing_info' for clarity
                 "keys": {},
@@ -157,79 +155,91 @@ def parse_descriptor_v3(text: str) -> Dict[str, Any]:
         i += 1
 
     if current_ip:
-        output["introduction_points"].append(current_ip)
+        output_metadata["introduction_points"].append(current_ip)
+
+    return output_metadata
+
+def parse_header_descriptor(lines: list) -> Dict[str, Any]:
+
+    output_descriptor = {
+        "hs_version": None,
+        "descriptor_lifetime": None,
+        "signing_key_cert": None,
+        "revision_counter": None,
+        "superencrypted": {},
+        "signature": None
+    }
+
+    i = 0
+    collecting_cert = False
+    cert_buffer = []
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        if collecting_cert:
+            cert_buffer.append(line)
+            if line.startswith("-----END"):
+                cert_content = "\n".join(cert_buffer)
+                parsed_cert = parse_ed25519_cert(cert_content)
+                output_descriptor["signing_key_cert"] = parsed_cert
+                collecting_cert = False
+                cert_buffer = []
+            i += 1
+            continue
+
+        if line.startswith("hs-descriptor"):
+            try:
+                output_descriptor["hs_version"] = int(line.split()[1])
+            except (IndexError, ValueError):
+                output_descriptor["hs_version"] = None
+
+        elif line.startswith("descriptor-lifetime"):
+            try:
+                output_descriptor["descriptor_lifetime"] = int(line.split()[1])
+            except (IndexError, ValueError):
+                output_descriptor["descriptor_lifetime"] = None
+
+        elif line.startswith("descriptor-signing-key-cert"):
+            # Start collecting the certificate
+            if i + 1 < len(lines) and lines[i+1].strip().startswith("-----BEGIN"):
+                collecting_cert = True
+                cert_buffer = [lines[i+1].strip()]
+                i += 1
+
+        elif line.startswith("revision-counter"):
+            try:
+                output_descriptor["revision_counter"] = int(line.split()[1])
+            except (IndexError, ValueError):
+                output_descriptor["revision_counter"] = None
+
+        elif line.startswith("superencrypted"):
+            pass
+
+        elif line.startswith("signature"):
+            try:
+                sig_value = line.split(None, 1)[1] if len(line.split()) > 1 else None
+                output_descriptor["signature"] = sig_value
+            except Exception:
+                output_descriptor["signature"] = None
+
+        i += 1
+
+    return output_descriptor
+
+def parse_descriptor_v3(header: str, metadata: str) -> Dict[str, Any]:
+
+    init = header.strip().split('\n')
+    output = parse_header_descriptor(init)
+    lines = metadata.strip().split('\n')
+    meta = parse_metadata_descriptor(lines)
+    output["superencrypted"] = meta
 
     return output
 
-# --- Main Execution ---
-
-descriptor_text = """@ Decrypted Descriptor - Superencrypted:
-create2-formats 2
-flow-control 1-2 31
-introduction-point AwAGfwAAARPwAhS9p8E4mrZTupXzNuKZeRGlWIwAUgMgrmowkV2ld2eacE+CJOA2/q/RJ83iymco/kWcVL8WDDY=
-onion-key ntor JDL3uwvVOskBT87Wvb+olfO3mi+qMceSHWWicdwBZSA=
-auth-key
------BEGIN ED25519 CERT-----
-AQkAB4deAQzi5m/686wDsNHXTIS5hPrO0/0M9r3PPPwOzaHkYPI2AQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/5SsReM46FihYsHbhbb3+zPlzqiz
-dbSv3Z0f4im51TYJStS+/awy10r53zIJXTeCUTLM/+eKTruSbrPmniPAog0=
------END ED25519 CERT-----
-enc-key ntor EOQvtORGzbTm3rw99XV07cE9urYVea020r+kt4fxrF4=
-enc-key-cert
------BEGIN ED25519 CERT-----
-AQsAB4deAV27ZQImga/Gp+HEPzrcvvedCFA4UFTOkUdIwgaGDIIbAQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/1O9O7bdZ7Zvpb6x2qiDTt/lUFi+
-C+yqNS+g9WvDa+R4J+igQaJoXqFBp2PDb6pSmHN47eXm5znXeOUbOZLWWwg=
------END ED25519 CERT-----
-introduction-point AwAGfwAAARPtAhS+g3qekSkUm6sxjJhru8eF+do32gMgLhQdxtqCDcpUrkE4/ev8UjP6env5bDjbm9tUomwi4Jc=
-onion-key ntor PrfRrmVdHPDD9N+uFgnj+alwdDTLjS6HoANog+Hpkws=
-auth-key
------BEGIN ED25519 CERT-----
-AQkAB4deAcpETVFE7EuaMIrzM8gEQpq+gWGGI8i+0VmKA8Kdjb8aAQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/zobm6eb7tSKl26eIqRsdN2sLXFJ
-6zN/txLdCVaZOfLStU37cs7897uppHB+qFpSrMQVdA0zEMUA8SeDu6M8/As=
------END ED25519 CERT-----
-enc-key ntor 79Mni0eTMTRWu2CcbjnCO/hLQG4TuvvGUIhCjjrHYiY=
-enc-key-cert
------BEGIN ED25519 CERT-----
-AQsAB4deATkVtSoetULgtOdYOE3UubDZ0ntiUCGYMfq/h9psWpolAQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/1OP8Hq9QX7SnV+oNYM8spt4fL7i
-ESq08MEgZJhnwYX80Zii5K/Z02a+SnJCFkiIPrU90fssfxkgCAZqUnGcGAk=
------END ED25519 CERT-----
-introduction-point AwAGfwAAARPvAhSQVvwPyN1LeKCcDPq7J2PTl8k4oQMgln3A+op6v9q7+McAIUDv/lmqEs9zdw/Qbc1zyVIWYPw=
-onion-key ntor goPqp+OkVDdAPZQuSLuKByhdWOvk5+vfu4qIvgubPnw=
-auth-key
------BEGIN ED25519 CERT-----
-AQkAB4deAau0NsMdseb4+KGCdDTs8kjX3MSu8k5xwKMZwRNjHioaAQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/0FkxeRMj0l3/78Qctr+uUPnVFhJ
-I9i46N+0WevgoP4CJKPHZlOeLlcC4d4zno5KxScxYhcvaZYVFTuAHkqY+g0=
------END ED25519 CERT-----
-enc-key ntor r70NuUL8Wh2gACuDoT3NaWezZV0rSnt7EBZQ5C0c8Hs=
-enc-key-cert
------BEGIN ED25519 CERT-----
-AQsAB4deAdLlVV2/piFdsyeUhwLpfc691oaOUES2za+K/wn3UTlJAQAgBAA/Nri9
-MelmC5CchyZt0gQA9dtElNfAODPBml2XVz9v/2TU8lwPfjHgx2Zw4EU03MMS+iyL
-Z6m0gFjH8GlSATThriAKmRdv2lgTxfVH9dinS7sO2mtpY1LFa3hWZgEvdgY=
------END ED25519 CERT-----"""
-
-if __name__ == "__main__":
-    json_data = parse_descriptor_v3(descriptor_text)
-    
-    output_filename = "tor_descriptor_decoded.json"
-    with open(output_filename, "w", encoding="utf-8") as f:
+def json_data_export(name: str, json_data):
+    with open(name, "w", encoding="utf-8") as f:
         json.dump(json_data, f, indent=2)
-    
-    print(f"Successfully created {output_filename}")
-    # print(f"Parsed {len(json_data['introduction_points'])} introduction points.")
-    
-    print(json_data)
-    #Display the first introduction point to verify decoding
-    if json_data['introduction_points']:
-        ip1 = json_data['introduction_points'][0]['routing_info']
-        print("\n--- Sample Decoded Routing Info (First Intro Point) ---")
-        print(f"Relay ID (Hex): {ip1.get('relay_id_hex')}")
-        print(f"IP Address: {ip1.get('ip_address')}")
-        print(f"Port: {ip1.get('port')}")
-        print(f"Address Type Byte: {ip1.get('address_type_byte')}")
-        print(f"Key Length: {ip1.get('key_length')}")
-        print(f"Full Hex: {ip1.get('raw_hex')}")

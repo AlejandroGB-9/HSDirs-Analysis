@@ -7,7 +7,10 @@ Fetch HSDir descriptors with Stem - Chutney network.
 import os
 import time
 import stem
+from descParse import parse_descriptor_v3 as metadataParser
+from descParse import json_data_export as jsonExport
 import traceback
+import datetime
 from stem.control import Controller
 from stem.descriptor.hidden_service import HiddenServiceDescriptorV3
 
@@ -19,36 +22,37 @@ CONTROL_PORT = 8009  # Indicated and established in the torrc configuration of t
 COOKIE_PATH = os.path.join(NODE_CLIENT, "control_auth_cookie")
 HSDIR_HOSTNAME = os.path.join(NODE_DIR, os.listdir(NODE_DIR)[0] + "/010h/hidden_service/hostname")
 with open(HSDIR_HOSTNAME) as f: TARGET_ONION = f.read().rstrip("\n")
+REQUEST_COUNTER_INDEX = 1
 
 # Main
 def main():
-    print("=" * 40)
+    print("\n" + "=" * 40)
     print("HSDir Descriptor Fetcher - Chutney")
     print("=" * 40)
     
     # Verification - Cookie existance
     if not os.path.exists(COOKIE_PATH):
-        print(f"ERROR: Cookie file not found at {COOKIE_PATH}")
+        print(f"\n[ERROR] Cookie file not found at {COOKIE_PATH}")
         print("\tVerify that Chutney is running and all nodes are set up")
+        traceback.print_exc()
         return 1
     
+    # Controller - Setup, authentication and descriptor gathering
     try:
-        
-        print(f"\nConnecting Control-Port @ {CONTROL_PORT}...")
+        print(f"\n[INFO] Connecting Control-Port @ {CONTROL_PORT}...")
         controller = Controller.from_port(port=CONTROL_PORT)
-        print("\nAuthenticating client ...")
+        print("[INFO] Authenticating client...")
         controller.authenticate()
-        print("Authenticated successfully ...")
+        print("[INFO] Authenticated successfully...")
         
-        print(f"Fetching descriptor for target onion HS @ {TARGET_ONION}...")
+        print(f"[INFO] Fetching descriptor for target onion HS @ {TARGET_ONION}...")
         desc = controller.get_hidden_service_descriptor(TARGET_ONION) #Only returns V2 type by design even if mismatch with version (V3), requires manual re-parse
         
+        #Descriptor - Information, re-parse and decyphering metadata
         if desc:
             print("\n" + "=" * 40)
             print("Descriptor Retrieved")
             print("=" * 40)
-
-            print()
 
             if hasattr(desc, 'get_bytes'):
                 raw_text = desc.get_bytes().decode('utf-8')
@@ -56,25 +60,28 @@ def main():
                 raw_text = str(desc)
                         
             # Re-parse as V3 (bypassing controller's V2-only parser)
-            print("\n[INFO] Re-parsing as HiddenServiceDescriptorV3...\n")
+            print("\n[INFO] Re-parsing as HiddenServiceDescriptorV3...")
             desc = HiddenServiceDescriptorV3(raw_text.encode('utf-8'))
 
-            print(f"@ Descriptor Content:\n{desc}")
+            #print(f"[DEBUG] @ Descriptor Content:\n{desc}")
             
             try:
-                print("=" * 40)
-                print("Decrypting Descriptor...")
-                print("=" * 40)
+                print("[INFO] Decrypting Descriptor...")
                 decpt = desc.decrypt(TARGET_ONION)
-                print("\n@ Decrypted Descriptor - Superencrypted:")
-                print(decpt)
+                # print("\n[DEBUG] @ Decrypted Descriptor - Superencrypted:")
+                # print(decpt)
+                print("[INFO] Parsing descriptor information...")
+                parse = metadataParser(str(desc), str(decpt))
+                file_name = str(REQUEST_COUNTER_INDEX) + "_" + str(datetime.datetime.now()).strip(' ').split('.')[0].replace(' ','_') + ".json"
+                print("[INFO] Exporting information to JSON file...")
+                jsonExport(file_name, parse)
 
             except Exception as decrypt_error:
                 print(f"\n[ERROR] Failed to decrypt descriptor: {decrypt_error}")
                 traceback.print_exc()
                 return 1
             
-            print("=" * 40)
+            print("\n" + "=" * 40)
             return 0
 
         else:
@@ -98,6 +105,8 @@ def main():
 
 if __name__ == "__main__":
     success = main()
-    print(f"Exiting with code {success}...\n")
+    print("PROGRAM:")
+    print("=" * 40)
+    print(f"\n[INFO] Exiting with code {success}...\n")
     exit(0 if success else 1)
     

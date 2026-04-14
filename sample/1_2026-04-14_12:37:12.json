@@ -1,0 +1,125 @@
+{
+  "hs_version": 3,
+  "descriptor_lifetime": 180,
+  "signing_key_cert": {
+    "cert_raw_base64": "AQgAB4d5AW3f/2E5KZ8w2UdURR3rJLF+XpcRWqz9HqPEiDbXc30dAQAgBABPTXPhKDDMK8Pa4xsYwQ52G4dzuUJp3mZdstzK8gT8ccaCHyklMwV33CVqenvsbdvXrze1aqYtgQ/9tEVm67yeIQHmGStZLwK6GiyrJJvVjpO9JoScD0mKQcf96IxUHg8=",
+    "cert_raw_hex": "010800078779016ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1d01002004004f4d73e12830cc2bc3dae31b18c10e761b8773b94269de665db2dccaf204fc71c6821f2925330577dc256a7a7bec6ddbd7af37b56aa62d810ffdb44566ebbc9e2101e6192b592f02ba1a2cab249bd58e93bd26849c0f498a41c7fde88c541e0f",
+    "cert_length_bytes": 140
+  },
+  "revision_counter": 10042610,
+  "superencrypted": {
+    "create2_formats": "2",
+    "flow_control": "1-2 31",
+    "introduction_points": [
+      {
+        "index": 1,
+        "raw_value": "AwAGfwAAARPvAhQZ9buSl1ZWDNkLtxEsGRCWf1A/OwMgU0eiVCzwVgt39VCW6xa7P7j2muFliSBGbnfU/HmBOPk=",
+        "routing_info": {
+          "version_flags": "030006",
+          "ip_address": "127.0.0.1",
+          "port": 5103,
+          "hash_nonce_hex": "021419f5bb929756560cd90bb7112c1910967f503f3b0320",
+          "identity_key_hex": "5347a2542cf0560b77f55096eb16bb3fb8f69ae1658920466e77d4fc798138f9",
+          "raw_hex": "0300067f00000113ef021419f5bb929756560cd90bb7112c1910967f503f3b03205347a2542cf0560b77f55096eb16bb3fb8f69ae1658920466e77d4fc798138f9"
+        },
+        "keys": {
+          "onion_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "HgIMPZUROCFT1tffUqmLP9EahZUw0hKw0Xusa176cC8=",
+            "decoded_hex": "1e020c3d9511382153d6d7df52a98b3fd11a859530d212b0d17bac6b5efa702f"
+          },
+          "enc_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "lo6IZczG2i73UzARLd7MpZqPwAbifwclQY1oMGDpjiQ=",
+            "decoded_hex": "968e8865ccc6da2ef75330112ddecca59a8fc006e27f0725418d683060e98e24"
+          }
+        },
+        "certs": {
+          "auth_key": {
+            "cert_raw_base64": "AQkAB4d4AXqSxvPNAJrwn+4zLSzgZEv1vQMFg0N5ZRcX/w1dlRYfAQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9HaX04qVmqXYnJbpjhCp9hSSMVO1xpxEAtvMikW8toARo1vPlCZ+0MhQZMsRCiE8GcOYZTxCRi73iHh69nLBJDAo=",
+            "cert_raw_hex": "010900078778017a92c6f3cd009af09fee332d2ce0644bf5bd0305834379651717ff0d5d95161f01002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1da5f4e2a566a9762725ba63842a7d85248c54ed71a71100b6f322916f2da00468d6f3e5099fb432141932c442884f0670e6194f10918bbde21e1ebd9cb0490c0a",
+            "cert_length_bytes": 140
+          },
+          "enc_key_cert": {
+            "cert_raw_base64": "AQsAB4d4ASNdrU/KIVEZIMgB3Uzt0MLJuEmxsoglpBBfzKmhtE8WAQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9HdWPMpZdHOiPqXmvYTKVTezrvGQAFug1QXtaZw6sOT1kkzcE2ncZuT2z98PC3Cd147PHG9niFnGXngjjqUQ+AgQ=",
+            "cert_raw_hex": "010b0007877801235dad4fca21511920c801dd4cedd0c2c9b849b1b28825a4105fcca9a1b44f1601002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1dd58f32965d1ce88fa979af6132954decebbc640016e835417b5a670eac393d64933704da7719b93db3f7c3c2dc2775e3b3c71bd9e21671979e08e3a9443e0204",
+            "cert_length_bytes": 140
+          }
+        }
+      },
+      {
+        "index": 2,
+        "raw_value": "AwAGfwAAARPwAhRSQYlq0kf2VQ1otS7GPUykocAatQMglZEBO3xv8IS1V6rd9VKn90XjYmtA28jyklgL2Vu3c6Y=",
+        "routing_info": {
+          "version_flags": "030006",
+          "ip_address": "127.0.0.1",
+          "port": 5104,
+          "hash_nonce_hex": "02145241896ad247f6550d68b52ec63d4ca4a1c01ab50320",
+          "identity_key_hex": "9591013b7c6ff084b557aaddf552a7f745e3626b40dbc8f292580bd95bb773a6",
+          "raw_hex": "0300067f00000113f002145241896ad247f6550d68b52ec63d4ca4a1c01ab503209591013b7c6ff084b557aaddf552a7f745e3626b40dbc8f292580bd95bb773a6"
+        },
+        "keys": {
+          "onion_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "5ZBejdvnIej/vI59G18FZSn86VLgcIL1vuvCcr/QSg8=",
+            "decoded_hex": "e5905e8ddbe721e8ffbc8e7d1b5f056529fce952e07082f5beebc272bfd04a0f"
+          },
+          "enc_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "6mLOlUx8ci+7wccONqKDLq55fBK1c+J/Rq7OIaD3/S4=",
+            "decoded_hex": "ea62ce954c7c722fbbc1c70e36a2832eae797c12b573e27f46aece21a0f7fd2e"
+          }
+        },
+        "certs": {
+          "auth_key": {
+            "cert_raw_base64": "AQkAB4d4AaE/Xaz2fviKm69xvjIWO2xu+P0wHVjTgJJXcpEjxAoVAQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9HX+ru8I2vBmf5Q7XoDgumpE1w17GyPinIGmmIJh5BywMeJX9bZuq4hqKzfYO9e0tJ1R7qqJJqaiXPskT3JDJdwA=",
+            "cert_raw_hex": "01090007877801a13f5dacf67ef88a9baf71be32163b6c6ef8fd301d58d3809257729123c40a1501002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1d7fabbbc236bc199fe50ed7a0382e9a9135c35ec6c8f8a72069a6209879072c0c7895fd6d9baae21a8acdf60ef5ed2d27547baaa249a9a8973ec913dc90c97700",
+            "cert_length_bytes": 140
+          },
+          "enc_key_cert": {
+            "cert_raw_base64": "AQsAB4d4AbGWePcxEaGkgCYbetCQD0dLiwh1EYWRi4msG/Em4mlEAQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9HTea5YFDy6vzGkTbDVOW3v5ZaiULuJGRGdodaGh4vRop7VgX9LcfVqPJ0vsA1LevktIhciUvjXNzNraQPK57VAc=",
+            "cert_raw_hex": "010b0007877801b19678f73111a1a480261b7ad0900f474b8b08751185918b89ac1bf126e2694401002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1d379ae58143cbabf31a44db0d5396defe596a250bb8919119da1d686878bd1a29ed5817f4b71f56a3c9d2fb00d4b7af92d22172252f8d737336b6903cae7b5407",
+            "cert_length_bytes": 140
+          }
+        }
+      },
+      {
+        "index": 3,
+        "raw_value": "AwAGfwAAARPuAhRODYMffaEFRgTLhooi+DGiAPnEiQMgIzUMHuA6NXv7zd1nwvs8M4fPyQ0xT6Sxg+sqnuvXcdw=",
+        "routing_info": {
+          "version_flags": "030006",
+          "ip_address": "127.0.0.1",
+          "port": 5102,
+          "hash_nonce_hex": "02144e0d831f7da1054604cb868a22f831a200f9c4890320",
+          "identity_key_hex": "23350c1ee03a357bfbcddd67c2fb3c3387cfc90d314fa4b183eb2a9eebd771dc",
+          "raw_hex": "0300067f00000113ee02144e0d831f7da1054604cb868a22f831a200f9c489032023350c1ee03a357bfbcddd67c2fb3c3387cfc90d314fa4b183eb2a9eebd771dc"
+        },
+        "keys": {
+          "onion_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "2AWO/1OdI1zJtcdpFMgG7zhWznF9C7JmPqMmxJMLw28=",
+            "decoded_hex": "d8058eff539d235cc9b5c76914c806ef3856ce717d0bb2663ea326c4930bc36f"
+          },
+          "enc_key_ntor": {
+            "algorithm": "ntor",
+            "raw_base64": "dyvfGHH1uSsA0oIusjm15D7CGKJ08V99K4pNh3u0wwE=",
+            "decoded_hex": "772bdf1871f5b92b00d2822eb239b5e43ec218a274f15f7d2b8a4d877bb4c301"
+          }
+        },
+        "certs": {
+          "auth_key": {
+            "cert_raw_base64": "AQkAB4d4AelWEtTMruRfRKO3KcC0BUwfSoXUDtyaQ26X8ERhZRhGAQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9HSeAuEutv1p4iAHOimwKxscpRYBTCP4OM1PaENEHQmt4n+/IRv6AQ7Nv7jKvwg5iBSu/lkIwas94+cs8QDTCAwY=",
+            "cert_raw_hex": "01090007877801e95612d4ccaee45f44a3b729c0b4054c1f4a85d40edc9a436e97f0446165184601002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1d2780b84badbf5a788801ce8a6c0ac6c72945805308fe0e3353da10d107426b789fefc846fe8043b36fee32afc20e62052bbf9642306acf78f9cb3c4034c20306",
+            "cert_length_bytes": 140
+          },
+          "enc_key_cert": {
+            "cert_raw_base64": "AQsAB4d4AcQ78rw/Vj4oLoigcACvpN766E8eVnZvB7x2v1YdjH89AQAgBABt3/9hOSmfMNlHVEUd6ySxfl6XEVqs/R6jxIg213N9Hdeu+l3jkMQNIdfyUhM4oCAVXS0JxqINbWQu4ddA2FdFhFQx11lOE2zGlYXNLy5BOf1XfpK2desnk9eLrsxtfQQ=",
+            "cert_raw_hex": "010b0007877801c43bf2bc3f563e282e88a07000afa4defae84f1e56766f07bc76bf561d8c7f3d01002004006ddfff6139299f30d94754451deb24b17e5e97115aacfd1ea3c48836d7737d1dd7aefa5de390c40d21d7f2521338a020155d2d09c6a20d6d642ee1d740d85745845431d7594e136cc69585cd2f2e4139fd577e92b675eb2793d78baecc6d7d04",
+            "cert_length_bytes": 140
+          }
+        }
+      }
+    ]
+  },
+  "signature": "be5NupbaUBbkGc21x4bo1oBByhHg2YKonkGGT5gjmp3G2/k1o3m7J5mHX2zC40pRyAi1NZuakG4UYrN8eFzvDg"
+}

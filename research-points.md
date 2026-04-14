@@ -6,7 +6,7 @@ Tasks - Private network:
 
 - [x] Build python program - Chutney based
 
-- [ ] Get cert-key of HS to decrypt and extract descriptor content - Chutney based
+- [x] Get cert-key of HS to decrypt and extract descriptor content - Chutney based
 
 - [ ] Set-up private Tor Network Shadow
 
