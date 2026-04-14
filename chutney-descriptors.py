@@ -22,7 +22,6 @@ CONTROL_PORT = 8009  # Indicated and established in the torrc configuration of t
 COOKIE_PATH = os.path.join(NODE_CLIENT, "control_auth_cookie")
 HSDIR_HOSTNAME = os.path.join(NODE_DIR, os.listdir(NODE_DIR)[0] + "/010h/hidden_service/hostname")
 with open(HSDIR_HOSTNAME) as f: TARGET_ONION = f.read().rstrip("\n")
-REQUEST_COUNTER_INDEX = 1
 
 # Main
 def main():
