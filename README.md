@@ -43,7 +43,7 @@ sudo cp /etc/tor/torrc /etc/tor/torrc.bak
 Then edit the configuration file torrc and enable the port that will use the controller to query HSDirs:
 
 ```
-#Uncomment line "ControlPort 9051"
+#Uncomment line "ControlPort 9051" and "CookieAuthentication 1"
 
 sudo vim /etc/tor/torrc
 ```
@@ -82,7 +82,7 @@ In this project 2 tools will be used for creating a private Tor network under di
         - Small scale (10-20 nodes)
         - No built-in latency, packet loss, or Internet topology
 
-- Shadow
+<!-- - Shadow
     -
     - Simulates a full network (latency, bandwidth, churn)
     - Runs Tor inside that simulated environment
@@ -96,7 +96,7 @@ In this project 2 tools will be used for creating a private Tor network under di
     - WARNINGS:
         - Harder to set up
         - Heavy (RAM-intensive)
-        - Some abstraction (not a perfect-real network behavior)
+        - Some abstraction (not a perfect-real network behavior) -->
 
 ## 2.1 Chutnet set-up
 
@@ -161,7 +161,7 @@ The following files have been made to create and adapted program to collect HSDi
 - descParse.py @ File created to parse descriptor information into a JSON file for analysis, required on main programs of chutney to parse information
 - mulreq-chutney-descriptors.py @ Alternative file created to test multiple request to have a real execution line to gather information
 
-# 2.2 Shadow set-up
+<!-- # 2.2 Shadow set-up
 
 Before installing of cloning the repository of Shadow it is necessary to install the required dependencies for it to properly work. Given this is made in a debian-based environment refer to its guide to install the dependencies with the owned packet manager. Nevertheless, the following steps are custom made for errors avoidance:
 
@@ -348,5 +348,10 @@ As Shadow requires higher system limits and to manage thousands of open files an
         pkill -9 shadow
         pkill -9 tor
         pkill -9 tgen
-        ```
+        ``` -->
 
+# 3. Execution
+
+```
+(venv) sudo ./venv/bin/python hsdir_desc_fetcher.py
+```
