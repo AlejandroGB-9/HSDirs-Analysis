@@ -60,7 +60,7 @@ To verify that everything is working correcty, with python execute the file test
 (venv) sudo ./venv/bin/python test-service.py
 ```
 
-# 2. Setting-up a private Tor network for testing
+<!-- # 2. Setting-up a private Tor network for testing
 
 Before making the program a private Tor network for research with HSDirs is needed.
 
@@ -354,4 +354,4 @@ As Shadow requires higher system limits and to manage thousands of open files an
 
 ```
 (venv) sudo ./venv/bin/python hsdir_desc_fetcher.py
-```
+``` -->
