@@ -8,6 +8,14 @@ sudo apt-get install tor
 sudo systemctl start tor
 ```
 
+Add the user to the tor group to properly execute the program without the requirement of using ```sudo```, in this case the machine is debian-based:
+
+```
+sudo usermod -aG debian-tor $USER
+```
+
+Proceed to log-out or reboot to take effect.
+
 For this study it is required the use of Python. To properly work please make use of a python version >= 3.12.
 
 Install the following dependencies:
@@ -57,5 +65,5 @@ sudo systemctl restart tor
 To verify that everything is working correcty, with python execute the file test-service.py:
 
 ```
-(venv) sudo ./venv/bin/python test-service.py
+(venv) python3 test-service.py
 ```
