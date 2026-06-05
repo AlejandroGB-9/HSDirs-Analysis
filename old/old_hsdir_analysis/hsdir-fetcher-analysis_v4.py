@@ -31,7 +31,6 @@ import random
 import re
 import base64
 from stem.control import Controller, EventType
-from stem.descriptor.remote import DescriptorDownloader
 
 # Configuration
 CONTROL_PORT = 9051
@@ -54,10 +53,6 @@ state_lock = threading.Lock()
 # Global state tracking for active ephemerals
 active_ephemerals = set()
 tracked_target_hsdirs = {}  # Format: { fingerprint: {"onion_address": x, "first_seen": x} }
-hsdir_contact_cache = {}    # Format: { fingerprint: {"contact": str, "last_fetched": datetime} }
-
-# Remote directory authority downloader reference
-downloader = DescriptorDownloader(timeout=15)
 
 def save_json_log(filename, data):
     try:
@@ -68,7 +63,6 @@ def save_json_log(filename, data):
 
     except Exception as e:
         print(f"[LOG EXCEPTION] Failed writing entry to {filename}: {e}")
-        traceback.print_exc()
 
 def get_authenticated_controller():
     """Generates isolated socket connections to prevent control channel deadlocks."""
@@ -86,7 +80,6 @@ def run_event_listener():
             time.sleep(1)
     except Exception as e:
         print(f"[CRITICAL] Event listener stream failed to register: {e}")
-        traceback.print_exc()
 
 def signal_handler(sig, frame):
     global SHUTDOWN_FLAG
@@ -109,83 +102,6 @@ def calculate_ring_distance(hsdir_index_hex, onion_target_index_hex):
         return distance, round((distance / RING_SIZE) * 100, 2)
     except Exception:
         return None
-
-def get_relay_contact_info(conn, fingerprint, node, utc_time):
-
-    global hsdir_contact_cache
-
-    # STRATEGY: REMOTE LOOKAHEAD ENGINE FOR CONTACT STRINGS (Refreshed every 24 Hours)
-    contact_string = "None Specified"
-
-    with state_lock:
-        cache_entry = hsdir_contact_cache.get(fingerprint)
-
-    needs_remote_fetch = False
-
-    if not cache_entry:
-        needs_remote_fetch = True
-    else:
-        # Verify if 24 hours have elapsed since this fingerprint's last remote check
-        if (utc_time - cache_entry["last_fetched"]) >= datetime.timedelta(days=1):
-            needs_remote_fetch = True
-        else:
-            contact_string = cache_entry["contact"]
-
-    if needs_remote_fetch:
-        try:
-            # Query a remote directory authority mirror directly
-            query = downloader.get_server_descriptors(fingerprints=[fingerprint])
-            remote_contact = "None Specified"
-
-            print(f"[DEBUG-DOWNLOADER] The query for contact retrieved:\n{query}")
-            
-            for desc in query:
-                if getattr(desc, 'contact', None):
-                    remote_contact = str(desc.contact)
-                    if remote_contact:
-                        if isinstance(remote_contact, bytes):
-                            remote_contact = remote_contact.decode('utf-8', errors='ignore').strip()
-                        else:
-                            remote_contact = str(remote_contact).strip()
-                        
-                        if remote_contact.startswith("b'") and remote_contact.endswith("'"):
-                            remote_contact = remote_contact[2:-1]
-                        elif remote_contact.startswith('b"') and remote_contact.endswith('"'):
-                            remote_contact = remote_contact[2:-1]
-                break
-            
-            # Process tracking for modifications or initial profile detections
-            old_contact = cache_entry["contact"] if cache_entry else None
-            if old_contact != remote_contact:
-                change_entry = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "fingerprint": fingerprint,
-                    "nickname": node.nickname if node.nickname else None,
-                    "ip_address": node.address if node.address else None,
-                    "old_contact": old_contact if old_contact else "INITIAL_DISCOVERY_RECORD",
-                    "new_contact": remote_contact
-                }
-                # Output variations directly to a specialized historical timeline log
-                save_json_log("hsdir_contact_history.json", change_entry)
-            
-            contact_string = remote_contact
-            
-            with state_lock:
-                hsdir_contact_cache[fingerprint] = {
-                    "contact": remote_contact,
-                    "last_fetched": utc_time
-                }
-        except Exception as remote_err:
-            # Fallback safely to current cache elements if network endpoints time out
-            if cache_entry:
-                contact_string = cache_entry["contact"]
-                print(f"[WARN] Remote mirror unreachable for {fingerprint}. Using cache fallback. Error: {remote_err}")
-                
-            else:
-                contact_string = "Fetch Failed (Authority Timeout)"
-                print(f"[WARN] Remote download failed for new fingerprint {fingerprint}. Error: {remote_err}")
-    
-    return contact_string
 
 # 1. Asynchronous Event Monitor: Catches Hash Ring positions and targets
 def hs_desc_event_listener(event):
@@ -441,7 +357,7 @@ def consensus_monitor():
         try:
 
             # Dynamic Time Calculation to find remaining window until XX:05 UTC
-            now = datetime.datetime.now(datetime.UTC)
+            now = datetime.datetime.utcnow()
 
             if last_hour == None:
 
@@ -478,9 +394,10 @@ def consensus_monitor():
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
                         print(f"[DEBUG-CONSENSUS] TEST-FAMILY&CONTACT with descriptor for fp @ {fingerprint}:\n {server_desc}")
                         declared_family = getattr(server_desc, 'family', []) if server_desc else []
+                        contact_string = getattr(server_desc, 'contact', "None Specified") if server_desc else "None Specified"
+
                         # Process structural node families clean listing for offline JSON formatting
                         family_list = list(declared_family) if isinstance(declared_family, (set, list)) else []
-                        contact_string = get_relay_contact_info(conn, fingerprint, node, now) 
 
                         if "HSDir" in node.flags:
 
@@ -682,7 +599,6 @@ def consensus_monitor():
 
         except Exception as e:
             print(f"[AUDITOR ERROR] Main monitoring thread loop exception: {e}")
-            traceback.print_exc()
 
         # Passive wait tracking interval cleanly
         for _ in range(CONSENSUS_INTERVAL):
