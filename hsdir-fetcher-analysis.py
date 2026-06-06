@@ -493,6 +493,7 @@ def consensus_monitor():
                         declared_family = getattr(server_desc, 'family', []) if server_desc else []
                         # Process structural node families clean listing for offline JSON formatting
                         family_list = list(declared_family) if isinstance(declared_family, (set, list)) else []
+                        family_list = [entry.lstrip('$') for entry in family_list]
                         contact_string = get_relay_contact_info(conn, fingerprint, node, now) 
 
                         if "HSDir" in node.flags:
