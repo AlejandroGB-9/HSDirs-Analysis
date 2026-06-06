@@ -30,6 +30,7 @@ import traceback
 import random
 import re
 import base64
+import ast
 from stem.control import Controller, EventType
 from stem.descriptor.remote import DescriptorDownloader
 
@@ -143,15 +144,28 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
                 if getattr(desc, 'contact', None):
                     remote_contact = str(desc.contact)
                     if remote_contact:
-                        if isinstance(remote_contact, bytes):
-                            remote_contact = remote_contact.decode('utf-8', errors='ignore').strip()
-                        else:
-                            remote_contact = str(remote_contact).strip()
+
+                        if isinstance(remote_contact, bytes): 
+                            s = remote_contact.decode("utf-8", errors="ignore") 
+                        else: 
+                            s = str(remote_contact).strip() 
+
+                        while True: 
+                            try: 
+                                value = ast.literal_eval(s) 
+                                
+                                if isinstance(value, bytes): 
+                                    s = value.decode("utf-8", errors="ignore") 
+                                elif isinstance(value, str): 
+                                    s = value 
+                                else: 
+                                    break
+
+                            except (ValueError, SyntaxError): 
+                                break
+
+                        remote_contact = s.strip() 
                         
-                        if remote_contact.startswith("b'") and remote_contact.endswith("'"):
-                            remote_contact = remote_contact[2:-1]
-                        elif remote_contact.startswith('b"') and remote_contact.endswith('"'):
-                            remote_contact = remote_contact[2:-1]
                 break
             
             # Process tracking for modifications or initial profile detections
@@ -371,8 +385,7 @@ def active_prober():
 
         try:
             
-            #ONIONS_TO_QUERY = THIRD_PARTY_ONIONS + OWNED_STATIC_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
-            ONIONS_TO_QUERY = TESTING_ONIONS
+            ONIONS_TO_QUERY = THIRD_PARTY_ONIONS + OWNED_STATIC_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
 
             for onion_id in ONIONS_TO_QUERY:
 
