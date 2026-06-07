@@ -37,28 +37,19 @@ from stem.descriptor.remote import DescriptorDownloader
 # Configuration
 CONTROL_PORT = 9051
 NUM_EPHEMERALS = 50              # Expanded overview array scale
-ROTATION_INTERVAL = 86400         # 24-hour before sweeping and creating fresh ephemerals
-CONSENSUS_INTERVAL = 600        # 30-min tracking snapshots
-PROBE_INTERVAL = 1200               # 20-min (Respectful frequency for checking third-party HSDirs)
+ROTATION_INTERVAL = 86400         # 24h before sweeping and creating fresh ephemerals
+CONSENSUS_INTERVAL = 600        # 1 hour tracking snapshots
+PROBE_INTERVAL = 1200               # 20 mins (Respectful frequency for checking third-party HSDirs)
 
 with open('target_onions/owned_onions.json', 'r', encoding='utf-8') as f: OWNED_STATIC_ONIONS = json.load(f)
 with open('target_onions/third_party_onions.json', 'r', encoding='utf-8') as f: THIRD_PARTY_ONIONS = json.load(f)
 
-ACCEPTED_LOG_FILES = ["hsdir_contact_history.json", "hsdir_ring_events.json", "prober_errors.json", "hsdir_consensus_snapshots.json"]
 SHUTDOWN_FLAG = False
 DATA_DIR = "/mnt/second-drive/hsdir_research_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Granular Thread-Safety Locks (Replaces single global lock bottleneck)
-file_write_locks = {}
-
-for _ in ACCEPTED_LOG_FILES:
-    file_write_locks[_] = threading.Lock()
-
-registry_lock = threading.Lock()
-hsdir_state_lock = threading.Lock()
-ephemeral_lock = threading.Lock()
-contact_cache_lock = threading.Lock()
+# Thread-safe logging helpers
+state_lock = threading.Lock()
 
 # Global state tracking for active ephemerals
 active_ephemerals = set()
@@ -69,19 +60,12 @@ hsdir_contact_cache = {}    # Format: { fingerprint: {"contact": str, "last_fetc
 downloader = DescriptorDownloader(timeout=15)
 
 def save_json_log(filename, data):
-    """
-    Thread-isolated file appender.
-    Uses dynamic file-specific locks to prevent cross-thread I/O blocking.
-    """
-    # 1. Fetch or dynamically create a lock dedicated exclusively to this filename
-        
     try:
-        target_file_lock = file_write_locks[filename] 
-        # 2. Only block if another thread is writing to the EXACT SAME file
-        with target_file_lock:
+        with state_lock:
             filepath = os.path.join(DATA_DIR, filename)
             with open(filepath, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(data) + ",\n")
+
     except Exception as e:
         print(f"[LOG EXCEPTION] Failed writing entry to {filename}: {e}")
         traceback.print_exc()
@@ -96,7 +80,7 @@ def run_event_listener():
     print("[INIT] Launching dedicated event registration pipe...")
     try:
         conn = get_authenticated_controller()
-        # print("[DEBUG-LISTENER] Launching event listener")
+        print("[DEBUG-LISTENER] Launching event listener")
         conn.add_event_listener(hs_desc_event_listener, EventType.HS_DESC)
         while not SHUTDOWN_FLAG:
             time.sleep(1)
@@ -131,17 +115,21 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
     global hsdir_contact_cache
 
     # STRATEGY: REMOTE LOOKAHEAD ENGINE FOR CONTACT STRINGS (Refreshed every 24 Hours)
+    contact_string = "None Specified"
 
-    with contact_cache_lock:
+    with state_lock:
         cache_entry = hsdir_contact_cache.get(fingerprint)
 
     needs_remote_fetch = False
-    contact_string = "None Specified"
 
     if not cache_entry:
         needs_remote_fetch = True
     else:
-        contact_string = cache_entry["contact"]
+        # Verify if 24 hours have elapsed since this fingerprint's last remote check
+        if (utc_time - cache_entry["last_fetched"]) >= datetime.timedelta(days=1):
+            needs_remote_fetch = True
+        else:
+            contact_string = cache_entry["contact"]
 
     if needs_remote_fetch:
         try:
@@ -149,7 +137,7 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
             query = downloader.get_server_descriptors(fingerprints=[fingerprint])
             remote_contact = "None Specified"
 
-            # print(f"[DEBUG-DOWNLOADER] The query for contact retrieved:\n{query}")
+            print(f"[DEBUG-DOWNLOADER] The query for contact retrieved:\n{query}")
             
             for desc in query:
                 if getattr(desc, 'contact', None):
@@ -195,12 +183,11 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
             
             contact_string = remote_contact
             
-            with contact_cache_lock:
+            with state_lock:
                 hsdir_contact_cache[fingerprint] = {
                     "contact": remote_contact,
                     "last_fetched": utc_time
                 }
-
         except Exception as remote_err:
             # Fallback safely to current cache elements if network endpoints time out
             if cache_entry:
@@ -215,9 +202,7 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
 
 # 1. Asynchronous Event Monitor: Catches Hash Ring positions and targets
 def hs_desc_event_listener(event):
-    global tracked_target_hsdirs, active_ephemerals
-
-    if SHUTDOWN_FLAG: return
+    global tracked_target_hsdirs
 
     try:
         
@@ -228,27 +213,29 @@ def hs_desc_event_listener(event):
 
         full_onion_address = f"{onion_id}.onion"
 
-        with ephemeral_lock:
-            is_ephemeral = onion_id in active_ephemerals
-
         is_tracked = (full_onion_address in OWNED_STATIC_ONIONS or 
                       full_onion_address in THIRD_PARTY_ONIONS or 
-                      is_ephemeral)
+                      onion_id in active_ephemerals)
 
         if not is_tracked:
             return
+
+        # print(f"[DEBUG-LISTENER] Tracked targets in memory: {len(tracked_target_hsdirs)}")
+        # print(f"[DEBUG-LISTENER] Processing Onion ID: {full_onion_address}")
         
         # Classify the service identity profile
         if full_onion_address in OWNED_STATIC_ONIONS:
             service_type = "STATIC_CONTROL"
         # if full_onion_address in TESTING_ONIONS:
         #     service_type = "STATIC_CONTROL"
-        elif is_ephemeral:
+        elif onion_id in active_ephemerals:
             service_type = "EPHEMERAL_VARIABLE"
         elif full_onion_address in THIRD_PARTY_ONIONS:
             service_type = "THIRD_PARTY_PROBE"
         else:
             return
+
+        # print(f"Event for onion @{onion_id}.onion of service type {service_type}:\n{event}")
 
         # Combine text elements to parse raw un-mapped v3 data fields
         raw_event_text = " ".join(list(event)) if isinstance(event, (list, tuple)) else str(event)
@@ -284,6 +271,9 @@ def hs_desc_event_listener(event):
             if idx_match:
                 hsdir_index_hrt = idx_match.group(1).upper()
 
+        if not hsdir_index_hrt:
+            return
+
         # Fallback 4: Extract Reason String
         reason = getattr(event, 'reason', None)
         if not reason:
@@ -308,26 +298,27 @@ def hs_desc_event_listener(event):
 
         actual_timestamp = datetime.datetime.now().isoformat()
 
-        # print(f"[DEBUG-LISTENER] Processing Onion ID: {full_onion_address}")
-        # print(f"Timestamp: {actual_timestamp}")
-        # print(f"Service Type: {service_type}")
-        # print(f"Onion Address: {full_onion_address}")
-        # print(f"Action: {event.action}")
-        # print(f"HSDir Fingerprint: {hsdir_fp}")
-        # print(f"Replica: {replica}")
-        # print(f"HSDir Index HRT: {hsdir_index_hrt}")
-        # print(f"Onion Target Index: {onion_target_index_hex}")
-        # print(f"Ring Distance: {ring_distance}")
-        # print(f"Ring Position: {ring_position}")
-        # print(f"Reason: {reason}")
-        # print(f"Event keys: {list(event)}")
+        print(f"[DEBUG-LISTENER] Processing Onion ID: {full_onion_address}")
+        print(f"Timestamp: {actual_timestamp}")
+        print(f"Service Type: {service_type}")
+        print(f"Onion Address: {full_onion_address}")
+        print(f"Action: {event.action}")
+        print(f"HSDir Fingerprint: {hsdir_fp}")
+        print(f"Replica: {replica}")
+        print(f"HSDir Index HRT: {hsdir_index_hrt}")
+        print(f"Onion Target Index: {onion_target_index_hex}")
+        print(f"Ring Distance: {ring_distance}")
+        print(f"Ring Position: {ring_position}")
+        print(f"Reason: {reason}")
+        print(f"Event keys: {list(event)}")
 
-        with hsdir_state_lock:
+        with state_lock:
             if hsdir_fp not in tracked_target_hsdirs:
                 tracked_target_hsdirs[hsdir_fp] = {
                     "associated_onion": f"{full_onion_address}",
                     "service_type": service_type,
                     "first_discovery": actual_timestamp,
+                    "consecutive_hourly_absences": 0,
                     "last_timestamp": actual_timestamp,
                     "last_known_action": event.action,
                     "descriptor_id_b64": descriptor_id,
@@ -345,8 +336,6 @@ def hs_desc_event_listener(event):
                 tracked_target_hsdirs[hsdir_fp]["ring_distance"] = ring_distance if ring_distance else tracked_target_hsdirs[hsdir_fp]["ring_distance"]
                 tracked_target_hsdirs[hsdir_fp]["ring_position"] = ring_position if ring_position else tracked_target_hsdirs[hsdir_fp]["ring_position"]
 
-        if event.action not in {"FAILED", "RECEIVED", "UPLOADED"}:
-            return
 
         log_entry = {
             "timestamp": actual_timestamp,
@@ -363,6 +352,7 @@ def hs_desc_event_listener(event):
             "reason": reason
         }
 
+        print(f"[HRT EVENT] {event.action} -> Onion: {full_onion_address}... on HRT Position: {hsdir_index_hrt} with distance {ring_distance}")
         save_json_log("hsdir_ring_events.json", log_entry)
 
     except Exception as e:
@@ -383,12 +373,11 @@ def active_prober():
 
     print("[PROBER] Active tracking loop initialized for endpoints.")
 
+    #ONIONS_TO_QUERY = TESTING_ONIONS
+
     while not SHUTDOWN_FLAG:
 
         try:
-
-            with ephemeral_lock:
-                current_ephemerals = [f"{uid}.onion" for uid in active_ephemerals]
             
             ONIONS_TO_QUERY = OWNED_STATIC_ONIONS + THIRD_PARTY_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
 
@@ -397,7 +386,7 @@ def active_prober():
                 if SHUTDOWN_FLAG: break
 
                 raw_onion = onion_id.replace(".onion", "")
-                # print(f"[DEBUG-PROBER] To probe onion service: {raw_onion}")
+                print(f"[DEBUG-PROBER] To probe onion service: {raw_onion}")
 
                 try:
                     # Use raw HSFETCH via control port to clear memory dependencies and force network checks
@@ -407,7 +396,7 @@ def active_prober():
                     conn.msg(f"HSFETCH {raw_onion}")
                     
                     # 2. Targeted bypass strategy: Directly poll known directories to dodge the local cache
-                    with hsdir_state_lock:
+                    with state_lock:
                         known_directories = [fp for fp, meta in tracked_target_hsdirs.items() if meta["associated_onion"] == onion_id]
 
                     for fp in known_directories:
@@ -436,7 +425,7 @@ def active_prober():
 
 # 3.Consensus Thread: Tracks network-wide HSDir churn, IP ranges, and stability
 def consensus_monitor():
-    global SHUTDOWN_FLAG, tracked_target_hsdirs, hsdir_contact_cache
+    global SHUTDOWN_FLAG, tracked_target_hsdirs
     
     print("[INIT] Launching network status consensus auditor...")
 
@@ -479,32 +468,32 @@ def consensus_monitor():
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
 
-            with hsdir_state_lock:
-                target_fingerprints = dict(tracked_target_hsdirs)
+            with state_lock:
+                target_fingerprints = list(tracked_target_hsdirs.keys())
 
-            # print(f"[DEBUG-CONSENSUS] Tracked targets: {len(target_fingerprints)}")
+            print(f"[DEBUG-CONSENSUS] Tracked targets: {len(target_fingerprints)}")
 
             if target_fingerprints:
                 print(f"[AUDITOR] Executing localized stability audit on {len(target_fingerprints)} target HSDirs...")
                 audited_nodes = []
-                state_updates = {}
 
-                for fingerprint, meta in target_fingerprints.items():
-                    if SHUTDOWN_FLAG: break
+                for fingerprint in target_fingerprints:
                     try:
                         node = conn.get_network_status(fingerprint)
 
                         # Fetch full server descriptors to query Sybil identity markers
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                        # print(f"[DEBUG-CONSENSUS] TEST-FAMILY&CONTACT with descriptor for fp @ {fingerprint}:\n {server_desc}")
+                        print(f"[DEBUG-CONSENSUS] TEST-FAMILY&CONTACT with descriptor for fp @ {fingerprint}:\n {server_desc}")
                         declared_family = getattr(server_desc, 'family', []) if server_desc else []
                         # Process structural node families clean listing for offline JSON formatting
-                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
+                        family_list = list(declared_family) if isinstance(declared_family, (set, list)) else []
+                        family_list = [entry.lstrip('$') for entry in family_list]
                         contact_string = get_relay_contact_info(conn, fingerprint, node, now) 
 
                         if "HSDir" in node.flags:
 
-                            state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
+                            with state_lock:
+                                tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] = 0
 
                             audited_nodes.append({
                                 "fingerprint": fingerprint,
@@ -515,14 +504,14 @@ def consensus_monitor():
                                 "published": node.published.isoformat() if node.published else None,
                                 "contact_info": contact_string,       # Structural Sybil Flag Vector
                                 "declared_family": family_list,       # Structural Sybil Flag Vector
-                                "mapped_onion": meta["associated_onion"],
-                                "service_type": meta["service_type"],
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": meta["last_timestamp"],
-                                "descriptor_id_b64": meta["descriptor_id_b64"],
-                                "hsdir_index_hrt": meta["hsdir_index_hrt"],
-                                "ring_distance": meta["ring_distance"],
-                                "ring_position": meta["ring_position"],
+                                "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
                                 "status": "ACTIVE_IN_RING"
                             })
 
@@ -531,18 +520,131 @@ def consensus_monitor():
                             
                             if last_hour < now.hour:
                                 last_hour = now.hour
-                                current_absences = state_updates[fingerprint].get("consecutive_hourly_absences") + 1
-                                state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
-                                consider_dropped = None
-                                if current_absences >= 2:
-                                    fp_status = "DEAD_OFFLINE_CHURN"
-                                    consider_dropped = datetime.datetime.now().isoformat()
-                                else:
-                                    fp_status = "STRIPPED_HSDIR_FLAG"
+                                with state_lock:
+                                    tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] += 1
+                                    current_absences = tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"]
+                                    if tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] >= 3:
+                                        # Mark it as dead in the logs later popped.
+                                        tracked_target_hsdirs[fingerprint]["last_known_action"] = "CLASSIFIED_DEAD_OFFLINE"
+                                        audited_nodes.append({
+                                            "fingerprint": fingerprint,
+                                            "nickname": node.nickname if node.nickname else None,
+                                            "ip_address": node.address if node.address else None,
+                                            "or_port": node.or_port if node.or_port else None,
+                                            "flags": node.flags if node.flags else None,
+                                            "published": node.published.isoformat() if node.published else None,
+                                            "contact_info": contact_string,       # Structural Sybil Flag Vector
+                                            "declared_family": family_list,       # Structural Sybil Flag Vector
+                                            "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                            "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                            "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                            "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                            "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                            "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                            "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                            "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                            "timestamp_dropped": datetime.datetime.now().isoformat(),
+                                            "status": "DEAD_OFFLINE_CHURN"
+                                        })
+
+                                    else:
+                                        audited_nodes.append({
+                                            "fingerprint": fingerprint,
+                                            "nickname": node.nickname if node.nickname else None,
+                                            "ip_address": node.address if node.address else None,
+                                            "or_port": node.or_port if node.or_port else None,
+                                            "flags": node.flags if node.flags else None,
+                                            "published": node.published.isoformat() if node.published else None,
+                                            "contact_info": contact_string,       # Structural Sybil Flag Vector
+                                            "declared_family": family_list,       # Structural Sybil Flag Vector
+                                            "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                            "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                            "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                            "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                            "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                            "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                            "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                            "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                            "timestamp_dropped": None,
+                                            "status": "STRIPPED_HSDIR_FLAG"
+                                        })
 
                             else:
-                                fp_status = "STRIPPED_HSDIR_FLAG"
+                                audited_nodes.append({
+                                    "fingerprint": fingerprint,
+                                    "nickname": node.nickname if node.nickname else None,
+                                    "ip_address": node.address if node.address else None,
+                                    "or_port": node.or_port if node.or_port else None,
+                                    "flags": node.flags if node.flags else None,
+                                    "published": node.published.isoformat() if node.published else None,
+                                    "contact_info": contact_string,       # Structural Sybil Flag Vector
+                                    "declared_family": family_list,       # Structural Sybil Flag Vector
+                                    "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                    "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                    "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                    "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                    "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                    "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                    "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                    "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                    "timestamp_dropped": None,
+                                    "status": "STRIPPED_HSDIR_FLAG"
+                                })
+                    
+                    except Exception:
+                        # Node has fallen out of the active consensus entirely (Churn Event)
+                        if last_hour < now.hour:
+                            last_hour = now.hour
+                            with state_lock:
+                                tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] += 1
+                                current_absences = tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"]
+                                if tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] >= 3:
+                                    # Mark it as dead in the logs later popped.
+                                    tracked_target_hsdirs[fingerprint]["last_known_action"] = "CLASSIFIED_DEAD_OFFLINE"
+                                    audited_nodes.append({
+                                        "fingerprint": fingerprint,
+                                        "nickname": node.nickname if node.nickname else None,
+                                        "ip_address": node.address if node.address else None,
+                                        "or_port": node.or_port if node.or_port else None,
+                                        "flags": node.flags if node.flags else None,
+                                        "published": node.published.isoformat() if node.published else None,
+                                        "contact_info": contact_string,       # Structural Sybil Flag Vector
+                                        "declared_family": family_list,       # Structural Sybil Flag Vector
+                                        "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                        "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                        "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                        "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                        "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                        "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                        "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                        "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                        "timestamp_dropped": datetime.datetime.now().isoformat(),
+                                        "status": "DEAD_OFFLINE_CHURN"
+                                    })
 
+                                else:
+                                    audited_nodes.append({
+                                        "fingerprint": fingerprint,
+                                        "nickname": node.nickname if node.nickname else None,
+                                        "ip_address": node.address if node.address else None,
+                                        "or_port": node.or_port if node.or_port else None,
+                                        "flags": node.flags if node.flags else None,
+                                        "published": node.published.isoformat() if node.published else None,
+                                        "contact_info": contact_string,       # Structural Sybil Flag Vector
+                                        "declared_family": family_list,       # Structural Sybil Flag Vector
+                                        "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                        "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                        "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                        "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                        "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                        "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                        "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                        "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                        "timestamp_dropped": None,
+                                        "status": "OFFLINE_CHURN"
+                                    })
+
+                        else:
                             audited_nodes.append({
                                 "fingerprint": fingerprint,
                                 "nickname": node.nickname if node.nickname else None,
@@ -552,54 +654,17 @@ def consensus_monitor():
                                 "published": node.published.isoformat() if node.published else None,
                                 "contact_info": contact_string,       # Structural Sybil Flag Vector
                                 "declared_family": family_list,       # Structural Sybil Flag Vector
-                                "mapped_onion": meta["associated_onion"],
-                                "service_type": meta["service_type"],
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": meta["last_timestamp"],
-                                "descriptor_id_b64": meta["descriptor_id_b64"],
-                                "hsdir_index_hrt": meta["hsdir_index_hrt"],
-                                "ring_distance": meta["ring_distance"],
-                                "ring_position": meta["ring_position"],
-                                "timestamp_dropped": consider_dropped,
-                                "status": fp_status
+                                "mapped_onion": tracked_target_hsdirs[fingerprint]["associated_onion"],
+                                "service_type": tracked_target_hsdirs[fingerprint]["service_type"],
+                                "first_discovery": tracked_target_hsdirs[fingerprint]["first_discovery"],
+                                "last_timestamp": tracked_target_hsdirs[fingerprint]["last_timestamp"],
+                                "descriptor_id_b64": tracked_target_hsdirs[fingerprint]["descriptor_id_b64"],
+                                "hsdir_index_hrt": tracked_target_hsdirs[fingerprint]["hsdir_index_hrt"],
+                                "ring_distance": tracked_target_hsdirs[fingerprint].get("ring_distance"),
+                                "ring_position": tracked_target_hsdirs[fingerprint].get("ring_position"),
+                                "timestamp_dropped": None,
+                                "status": "OFFLINE_CHURN"
                             })
-                    
-                    except Exception:
-                        # Node has fallen out of the active consensus entirely (Churn Event)
-                        if last_hour < now.hour:
-                            last_hour = now.hour
-                            current_absences = state_updates[fingerprint].get("consecutive_hourly_absences") + 1
-                            state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
-                            consider_dropped = None
-                            if current_absences >= 2:
-                                fp_status = "DEAD_OFFLINE_CHURN"
-                                consider_dropped = datetime.datetime.now().isoformat()
-                            else:
-                                fp_status = "OFFLINE_CHURN"
-
-                        else:
-                            fp_status = "OFFLINE_CHURN"
-
-                        audited_nodes.append({
-                            "fingerprint": fingerprint,
-                            "nickname": node.nickname if node.nickname else None,
-                            "ip_address": node.address if node.address else None,
-                            "or_port": node.or_port if node.or_port else None,
-                            "flags": node.flags if node.flags else None,
-                            "published": node.published.isoformat() if node.published else None,
-                            "contact_info": contact_string,       # Structural Sybil Flag Vector
-                            "declared_family": family_list,       # Structural Sybil Flag Vector
-                            "mapped_onion": meta["associated_onion"],
-                            "service_type": meta["service_type"],
-                            "first_discovery": meta["first_discovery"],
-                            "last_timestamp": meta["last_timestamp"],
-                            "descriptor_id_b64": meta["descriptor_id_b64"],
-                            "hsdir_index_hrt": meta["hsdir_index_hrt"],
-                            "ring_distance": meta["ring_distance"],
-                            "ring_position": meta["ring_position"],
-                            "timestamp_dropped": consider_dropped,
-                            "status": fp_status
-                        })
 
                 save_json_log("hsdir_consensus_snapshots.json", {
                     "timestamp": datetime.datetime.now().isoformat(),
@@ -607,19 +672,16 @@ def consensus_monitor():
                     "relays": audited_nodes
                 })
 
-                print(f"[AUDITOR] Audit completed. Logs committed to hsdir_consensus_snapshots.json.")            
+                print(f"[AUDITOR] Audit completed. Logs committed to targeted_hsdir_consensus.json.")            
 
                 # Check for historical nodes crossing the 3-hour definitive offline threshold
-                with hsdir_state_lock:
-                    if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                with state_lock:
+                    if tracked_target_hsdirs[fingerprint]["consecutive_hourly_absences"] >= 3:
                         tracked_target_hsdirs.pop(fingerprint)
-                        state_updates.pop(fingerprint)
-                        with contact_cache_lock:
-                            hsdir_contact_cache.pop(fingerprint)
 
             else:
                 # Prevent silent gaps: Log a baseline verification record if no nodes are discovered yet
-                save_json_log("hsdir_consensus_snapshots.json", {
+                save_json_log("targeted_hsdir_consensus.json", {
                     "timestamp": datetime.datetime.now().isoformat(),
                     "active_targets_count": 0,
                     "status": "AWAITING_FIRST_DESCRIPTOR_EVENT"
@@ -631,9 +693,9 @@ def consensus_monitor():
             traceback.print_exc()
 
         # Passive wait tracking interval cleanly
-        # for _ in range(CONSENSUS_INTERVAL):
-        #     if SHUTDOWN_FLAG: break
-        #     time.sleep(1)
+        for _ in range(CONSENSUS_INTERVAL):
+            if SHUTDOWN_FLAG: break
+            time.sleep(1)
 
 # 4. Scale-Optimized Loop: Drives 50 Ephemeral Onions Simultaneously = Scales out 800 HR reference points
 def scaled_ephemeral_manager():
@@ -649,18 +711,14 @@ def scaled_ephemeral_manager():
     while not SHUTDOWN_FLAG:
         try:
             # Step A: Clean up any old ephemerals safely
-            with ephemeral_lock:
-                expired_onions = list(active_ephemerals)
-            
-            if expired_onions:
-                print(f"[SCALE] Clearing {len(expired_onions)} expired ephemeral profiles...")
-                for onion_id in expired_onions:
-                    try: 
+            if active_ephemerals:
+                print(f"[SCALE] Clearing {len(active_ephemerals)} expired ephemeral profiles...")
+                for onion_id in list(active_ephemerals):
+                    try:
                         conn.remove_ephemeral_hidden_service(onion_id)
-                    except Exception: 
+                    except Exception:
                         pass
-                with ephemeral_lock:
-                    active_ephemerals.clear()
+                active_ephemerals.clear()
             
             # Step B: Bulk instantiate 50 fresh services across the ring spectrum
             print(f"[SCALE] Spawning {NUM_EPHEMERALS} concurrent v3 ephemeral targets...")
@@ -674,8 +732,7 @@ def scaled_ephemeral_manager():
                 try:
                     # await_publication=False avoids blocking execution threads
                     response = conn.create_ephemeral_hidden_service({80: 8130 + i}, key_content = 'ED25519-V3', await_publication=False)
-                    with ephemeral_lock:
-                        active_ephemerals.add(response.service_id)
+                    active_ephemerals.add(response.service_id)
                 except Exception as e:
                     print(f"[ERROR - BULK SPAWN ALLOCATION SLOT {i}]: {e}")
             
@@ -686,8 +743,7 @@ def scaled_ephemeral_manager():
             traceback.print_exc()
             
         # Hold positions open to collect behavioral metrics before changing targets
-        base_rotation_window = ROTATION_INTERVAL + int(random.uniform(-900, 900))
-        for _ in range(base_rotation_window):
+        for _ in range(ROTATION_INTERVAL):
             if SHUTDOWN_FLAG: break
             time.sleep(1)
 
@@ -696,8 +752,6 @@ def scaled_ephemeral_manager():
     for onion_id in list(active_ephemerals):
         try: conn.remove_ephemeral_hidden_service(onion_id)
         except: pass
-    
-    conn.close()
 
 def main():
     print("=" * 60)
@@ -721,10 +775,8 @@ def main():
         test_conn.close()
     except Exception as e:
         print(f"[FATAL SETUP ERROR] Cannot establish connection to Tor daemon over port 9051: {e}")
-        traceback.print_exc()
+        print("Please check that your torrc contains an active 'ControlPort 9051' directive.")
         sys.exit(1)
-
-    started = datetime.datetime.now().isoformat()
 
     threads = [
         threading.Thread(target=run_event_listener, daemon=True),
@@ -744,17 +796,6 @@ def main():
     print("[INFO] Waiting for threads to finish current tasks...")
     for t in threads:
         t.join()
-
-    ended = datetime.datetime.now().isoformat()
-
-    uptime = {
-        "started": started,
-        "ended": ended
-    }
-
-    filepath = os.path.join(DATA_DIR, "program_execution_period.json")
-    with open(filepath, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(uptime) + ",\n")
         
     print("[INFO] All threads stopped. Exiting cleanly.")
     sys.exit(0) 
