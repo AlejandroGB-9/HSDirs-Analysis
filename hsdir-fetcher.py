@@ -179,19 +179,15 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
                         
                 break
             
-            # Process tracking for modifications or initial profile detections
-            old_contact = cache_entry["contact"] if cache_entry else None
-            if old_contact != remote_contact:
-                change_entry = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "fingerprint": fingerprint,
-                    "nickname": node.nickname if node.nickname else None,
-                    "ip_address": node.address if node.address else None,
-                    "old_contact": old_contact if old_contact else "INITIAL_DISCOVERY_RECORD",
-                    "new_contact": remote_contact
-                }
-                # Output variations directly to a specialized historical timeline log
-                save_json_log("hsdir_contact_history.json", change_entry)
+            change_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "fingerprint": fingerprint,
+                "nickname": node.nickname if node.nickname else None,
+                "ip_address": node.address if node.address else None,
+                "contact_info": remote_contact
+            }
+            # Output variations directly to a specialized historical timeline log
+            save_json_log("hsdir_contact_history.json", change_entry)
             
             contact_string = remote_contact
             
