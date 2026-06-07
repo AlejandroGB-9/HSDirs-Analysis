@@ -67,3 +67,9 @@ To verify that everything is working correcty, with python execute the file test
 ```
 (venv) python3 test-service.py
 ```
+
+Create a folder-directory in your drive called hsdir_research_data, included the location into the variable DATA_DIR on the program, and modifiy the permissions so only the user can interact with it:
+
+```
+sudo chmod 700 hsdir_research_data
+```
