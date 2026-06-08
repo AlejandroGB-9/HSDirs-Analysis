@@ -31,53 +31,53 @@ import random
 import re
 import base64
 import ast
+
+# Stem library required dependencies
 from stem.control import Controller, EventType
 from stem.descriptor.remote import DescriptorDownloader
 
 # Configuration
-CONTROL_PORT = 9051
-NUM_EPHEMERALS = 50              # Expanded overview array scale
-ROTATION_INTERVAL = 86400         # 24-hour before sweeping and creating fresh ephemerals
-CONSENSUS_INTERVAL = 600        # 30-min tracking snapshots
-PROBE_INTERVAL = 1200               # 20-min (Respectful frequency for checking third-party HSDirs)
+CONTROL_PORT = 9051              # Tor's Control Port
+NUM_EPHEMERALS = 50              # Scale of ephemeral onion to open
+ROTATION_INTERVAL = 86400        # 24-hour interval before sweeping and creating fresh ephemerals
+#CONSENSUS_INTERVAL = 600        # 30-min interval for tracking consensus snapshots
+PROBE_INTERVAL = 1200            # 20-min interval between active probes
 
+# Collection of onion services to query
 with open('target_onions/owned_onions.json', 'r', encoding='utf-8') as f: OWNED_STATIC_ONIONS = json.load(f)
 with open('target_onions/third_party_onions.json', 'r', encoding='utf-8') as f: THIRD_PARTY_ONIONS = json.load(f)
 
+# Collection of file to create thread-safety locks (bottleneck issues)
 ACCEPTED_LOG_FILES = ["hsdir_contact_history.json", "hsdir_ring_events.json", "prober_errors.json", "hsdir_consensus_snapshots.json"]
+
+# Global condition and default log directory
 SHUTDOWN_FLAG = False
 DATA_DIR = "/mnt/second-drive/hsdir_research_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Granular Thread-Safety Locks (Replaces single global lock bottleneck)
+# Dictionary of thread-safety locks (bottleneck issues)
 file_write_locks = {}
 
 for _ in ACCEPTED_LOG_FILES:
     file_write_locks[_] = threading.Lock()
 
+# Collection of thread-data specific locks (deadlock-starvation issues) 
 registry_lock = threading.Lock()
 hsdir_state_lock = threading.Lock()
 ephemeral_lock = threading.Lock()
 contact_cache_lock = threading.Lock()
 
-# Global state tracking for active ephemerals
+# Global state data collector for active tracking
 active_ephemerals = set()
 tracked_target_hsdirs = {}  # Format: { fingerprint: {"onion_address": x, "first_seen": x} }
 hsdir_contact_cache = {}    # Format: { fingerprint: {"contact": str, "last_fetched": datetime} }
 
-# Remote directory authority downloader reference
+# Remote directory authority downloader reference (contact info)
 downloader = DescriptorDownloader(timeout=15)
 
 def save_json_log(filename, data):
-    """
-    Thread-isolated file appender.
-    Uses dynamic file-specific locks to prevent cross-thread I/O blocking.
-    """
-    # 1. Fetch or dynamically create a lock dedicated exclusively to this filename
-        
     try:
         target_file_lock = file_write_locks[filename] 
-        # 2. Only block if another thread is writing to the EXACT SAME file
         with target_file_lock:
             filepath = os.path.join(DATA_DIR, filename)
             with open(filepath, 'a', encoding='utf-8') as f:
@@ -87,7 +87,7 @@ def save_json_log(filename, data):
         traceback.print_exc()
 
 def get_authenticated_controller():
-    """Generates isolated socket connections to prevent control channel deadlocks."""
+    # Isolated socket connection (prevent control channel deadlocks)
     controller = Controller.from_port(port=CONTROL_PORT)
     controller.authenticate()
     return controller
@@ -96,7 +96,6 @@ def run_event_listener():
     print("[INIT] Launching dedicated event registration pipe...")
     try:
         conn = get_authenticated_controller()
-        # print("[DEBUG-LISTENER] Launching event listener")
         conn.add_event_listener(hs_desc_event_listener, EventType.HS_DESC)
         while not SHUTDOWN_FLAG:
             time.sleep(1)
@@ -110,11 +109,10 @@ def signal_handler(sig, frame):
     SHUTDOWN_FLAG = True
 
 def calculate_ring_distance(hsdir_index_hex, onion_target_index_hex):
-    """
-    Computes the clockwise distance between an HSDir's ring hash index and an
-    onion descriptor target index on Tor's 256-bit circular integer space.
-    Formula: Delta = (HSDir_Index - Onion_Index) mod 2^256
-    """
+    # Compute clockwise distance between an HSDir's ring hash index and an
+    # onion descriptor target index on Tor's 256-bit circular integer space.
+    # Formula: Delta = (HSDir_Index - Onion_Index) mod 2^256
+
     try:
         if not hsdir_index_hex or not onion_target_index_hex:
             return None
@@ -127,10 +125,8 @@ def calculate_ring_distance(hsdir_index_hex, onion_target_index_hex):
         return None
 
 def get_relay_contact_info(conn, fingerprint, node, utc_time):
-
+    # Remote lookahead for contact information of a fingerprint
     global hsdir_contact_cache
-
-    # STRATEGY: REMOTE LOOKAHEAD ENGINE FOR CONTACT STRINGS (Refreshed every 24 Hours)
 
     with contact_cache_lock:
         cache_entry = hsdir_contact_cache.get(fingerprint)
@@ -145,11 +141,9 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
 
     if needs_remote_fetch:
         try:
-            # Query a remote directory authority mirror directly
+            # Query the remote directory authority mirror directly
             query = downloader.get_server_descriptors(fingerprints=[fingerprint])
             remote_contact = "None Specified"
-
-            # print(f"[DEBUG-DOWNLOADER] The query for contact retrieved:\n{query}")
             
             for desc in query:
                 if getattr(desc, 'contact', None):
@@ -186,7 +180,7 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
                 "ip_address": node.address if node.address else None,
                 "contact_info": remote_contact
             }
-            # Output variations directly to a specialized historical timeline log
+
             save_json_log("hsdir_contact_history.json", change_entry)
             
             contact_string = remote_contact
@@ -198,19 +192,17 @@ def get_relay_contact_info(conn, fingerprint, node, utc_time):
                 }
 
         except Exception as remote_err:
-            # Fallback safely to current cache elements if network endpoints time out
+            # Fallback
             if cache_entry:
                 contact_string = cache_entry["contact"]
-                print(f"[WARN] Remote mirror unreachable for {fingerprint}. Using cache fallback. Error: {remote_err}")
                 
             else:
                 contact_string = "Fetch Failed (Authority Timeout)"
-                print(f"[WARN] Remote download failed for new fingerprint {fingerprint}. Error: {remote_err}")
     
     return contact_string
 
-# 1. Asynchronous Event Monitor: Catches Hash Ring positions and targets
 def hs_desc_event_listener(event):
+    # Asynchronous Event Monitor: Get hash ring positions and targets
     global tracked_target_hsdirs, active_ephemerals
 
     if SHUTDOWN_FLAG: return
@@ -234,11 +226,9 @@ def hs_desc_event_listener(event):
         if not is_tracked:
             return
         
-        # Classify the service identity profile
+        # Onion type classification
         if full_onion_address in OWNED_STATIC_ONIONS:
             service_type = "STATIC_CONTROL"
-        # if full_onion_address in TESTING_ONIONS:
-        #     service_type = "STATIC_CONTROL"
         elif is_ephemeral:
             service_type = "EPHEMERAL_VARIABLE"
         elif full_onion_address in THIRD_PARTY_ONIONS:
@@ -246,10 +236,9 @@ def hs_desc_event_listener(event):
         else:
             return
 
-        # Combine text elements to parse raw un-mapped v3 data fields
         raw_event_text = " ".join(list(event)) if isinstance(event, (list, tuple)) else str(event)
 
-        # Fallback 1: Extract HSDir Fingerprint
+        # Extract HSDir fingerprint
         hsdir_fp = getattr(event, 'hsdir', None)
         if not hsdir_fp:
             fp_match = re.search(r'\$([0-9A-Fa-f]{40})', raw_event_text)
@@ -259,35 +248,34 @@ def hs_desc_event_listener(event):
         if not hsdir_fp:
             return
 
-        # Custom Field: Extract Descriptor ID (Blinded Public Key)
-        # Matches the 43-character Base64 token directly succeeding the HSDir fingerprint/nickname
+        # Extract Descriptor ID (Blinded Public Key)
         descriptor_id = None
         desc_match = re.search(r'\$[0-9A-Fa-f]{40}(?:~[^\s]+)?\s+([A-Za-z0-9+/]{43})(?:\s+|$)', raw_event_text)
         if desc_match:
             descriptor_id = desc_match.group(1)
 
-        # Fallback 2: Extract Replica Index
+        # Extract replica index (if any)
         replica = getattr(event, 'replica', None)
         if replica is None:
             rep_match = re.search(r'REPLICA=(\d+)', raw_event_text, re.IGNORECASE)
             if rep_match:
                 replica = int(rep_match.group(1))
 
-        # Fallback 3: Extract HSDIR_INDEX
+        # Extract HSDIR_INDEX field
         hsdir_index_hrt = getattr(event, 'hsdir_index', None)
         if not hsdir_index_hrt:
             idx_match = re.search(r'HSDIR_INDEX=([0-9A-Fa-f]{64})', raw_event_text, re.IGNORECASE)
             if idx_match:
                 hsdir_index_hrt = idx_match.group(1).upper()
 
-        # Fallback 4: Extract Reason String
+        # Extract reason string (in FAILED actions)
         reason = getattr(event, 'reason', None)
         if not reason:
             reason_match = re.search(r'REASON=(\w+)', raw_event_text, re.IGNORECASE)
             if reason_match:
                 reason = reason_match.group(1)
 
-        # Real-time conversion of Descriptor ID to 256-bit hex layout (onion_target_index)
+        # Descriptor ID conversion to 256-bit hex layout (onion_target_index)
         onion_target_index_hex = None
         ring_distance = None
         ring_position = None
@@ -303,20 +291,6 @@ def hs_desc_event_listener(event):
                 pass
 
         actual_timestamp = datetime.datetime.now().isoformat()
-
-        # print(f"[DEBUG-LISTENER] Processing Onion ID: {full_onion_address}")
-        # print(f"Timestamp: {actual_timestamp}")
-        # print(f"Service Type: {service_type}")
-        # print(f"Onion Address: {full_onion_address}")
-        # print(f"Action: {event.action}")
-        # print(f"HSDir Fingerprint: {hsdir_fp}")
-        # print(f"Replica: {replica}")
-        # print(f"HSDir Index HRT: {hsdir_index_hrt}")
-        # print(f"Onion Target Index: {onion_target_index_hex}")
-        # print(f"Ring Distance: {ring_distance}")
-        # print(f"Ring Position: {ring_position}")
-        # print(f"Reason: {reason}")
-        # print(f"Event keys: {list(event)}")
 
         with hsdir_state_lock:
             if hsdir_fp not in tracked_target_hsdirs:
@@ -365,8 +339,8 @@ def hs_desc_event_listener(event):
         print(f"[EXC-EVENT-LISTENER] Error parsing incoming stream frame: {e}")
         traceback.print_exc()
 
-# 2. Third-Party Active Prober Engine: Forces Un-cached Network Lookups
 def active_prober():
+    # Active onion prober
     global SHUTDOWN_FLAG
 
     print("[INIT] Launching isolated uncached HSFETCH network channel...")
@@ -393,16 +367,14 @@ def active_prober():
                 if SHUTDOWN_FLAG: break
 
                 raw_onion = onion_id.replace(".onion", "")
-                # print(f"[DEBUG-PROBER] To probe onion service: {raw_onion}")
 
                 try:
-                    # Use raw HSFETCH via control port to clear memory dependencies and force network checks
-                    # This causes Tor to locate and interact with the remote service's current HSDirs
+                    # Use raw HSFETCH to clear memory dependencies and force un-cached network checks
                     
-                    # 1. Standard dynamic ring fetch
+                    # Standard dynamic ring fetch
                     conn.msg(f"HSFETCH {raw_onion}")
                     
-                    # 2. Targeted bypass strategy: Directly poll known directories to dodge the local cache
+                    # Direct poll from known directories
                     with hsdir_state_lock:
                         known_directories = [fp for fp, meta in tracked_target_hsdirs.items() if meta["associated_onion"] == onion_id]
 
@@ -420,18 +392,18 @@ def active_prober():
                         "error": str(e)
                     })
 
-                time.sleep(int(random.uniform(5, 15))) # Slight spacer between unique domain fetches
+                time.sleep(random.uniform(5.0, 15.0)) # Spacer between unique domain fetches
 
         except Exception as e:
             print(f"[PROBER ERROR] Main discovery loop exception: {e}")
 
-        # Wait for the next monitoring block interval safely
+        # Wait for the next monitoring block interval
         for _ in range(PROBE_INTERVAL):
             if SHUTDOWN_FLAG: break
             time.sleep(1)
 
-# 3.Consensus Thread: Tracks network-wide HSDir churn, IP ranges, and stability
 def consensus_monitor():
+    # Consensus Monitor: Tracks known network HSDir churn, IP ranges, and stability
     global SHUTDOWN_FLAG, tracked_target_hsdirs, hsdir_contact_cache
     
     print("[INIT] Launching network status consensus auditor...")
@@ -446,7 +418,7 @@ def consensus_monitor():
         if SHUTDOWN_FLAG: break
         time.sleep(1)
 
-    last_hour = None
+    last_hour = datetime.datetime.now(datetime.UTC).hour
 
     print("[CONSENSUS] Consensus tracking engine started.")
     
@@ -454,12 +426,9 @@ def consensus_monitor():
 
         try:
 
-            # Dynamic Time Calculation to find remaining window until XX:05 UTC
+            # Time calculation to find the remaining window until XX:05 UTC
             now = datetime.datetime.now(datetime.UTC)
-
-            if last_hour == None:
-
-                last_hour = now.hour
+            timestamp = datetime.datetime.now().isoformat()
 
             if now.minute >= 5:
                 next_sync = (now + datetime.timedelta(hours=1)).replace(minute=5, second=0, microsecond=0)
@@ -468,9 +437,7 @@ def consensus_monitor():
             
             time_until_sync = (next_sync - now).total_seconds()
             
-            # If 15 mins (900s) or less remain, sleep precisely until the publication pass
-            if 0 < time_until_sync <= 900:
-                print(f"[MONITOR] Within the 15-minute generation window ({time_until_sync:.1f}s remaining). Commencing deep alignment sleep...")
+            if 0 < time_until_sync:
                 for _ in range(int(time_until_sync)):
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
@@ -478,103 +445,71 @@ def consensus_monitor():
             with hsdir_state_lock:
                 target_fingerprints = dict(tracked_target_hsdirs)
 
-            # print(f"[DEBUG-CONSENSUS] Tracked targets: {len(target_fingerprints)}")
-
             if target_fingerprints:
                 print(f"[AUDITOR] Executing localized stability audit on {len(target_fingerprints)} target HSDirs...")
                 audited_nodes = []
                 state_updates = {}
+
+                hour_changed = (last_hour != now.hour)
 
                 for fingerprint, meta in target_fingerprints.items():
                     if SHUTDOWN_FLAG: break
                     try:
                         node = conn.get_network_status(fingerprint)
 
-                        # Fetch full server descriptors to query Sybil identity markers
+                        # Fetch server full and micro descriptors to query Sybil identity markers (effective family and contact info)
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                        # print(f"[DEBUG-CONSENSUS] TEST-FAMILY&CONTACT with descriptor for fp @ {fingerprint}:\n {server_desc}")
-                        declared_family = getattr(server_desc, 'family', []) if server_desc else []
-                        # Process structural node families clean listing for offline JSON formatting
-                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
+                        declared_family = getattr(server_desc, 'family', None) if server_desc else None
+                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+                        declared_family_id = getattr(server_desc, 'family_ids', None)
+
+                        if not declared_family_id and server_desc:
+                            for line in server_desc.get_unrecognized_lines():
+                                if line.startswith("family-ids "):
+                                    # Split off the token prefix and capture all space-separated IDs
+                                    declared_family_id = line.strip().split()[1:]
+                                    break
+
+                        if not declared_family_id and server_desc:
+                            try:
+                                for line in server_desc.get_text().splitlines():
+                                    if line.startswith("family-ids "):
+                                        declared_family_id = line.strip().split()[1:]
+                                        break
+                            except Exception:
+                                pass
+
+                        if declared_family_id:
+                            declared_family_id = declared_family_id[0].replace("ed25519:", "")
+
+                        if not declared_family_id:
+                            declared_family_id = None
+
                         contact_string = get_relay_contact_info(conn, fingerprint, node, now) 
 
                         if "HSDir" in node.flags:
 
                             state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
-
-                            audited_nodes.append({
-                                "fingerprint": fingerprint,
-                                "nickname": node.nickname,
-                                "ip_address": node.address,
-                                "or_port": node.or_port,
-                                "flags": node.flags,
-                                "published": node.published.isoformat() if node.published else None,
-                                "contact_info": contact_string,       # Structural Sybil Flag Vector
-                                "declared_family": family_list,       # Structural Sybil Flag Vector
-                                "mapped_onion": meta["associated_onion"],
-                                "service_type": meta["service_type"],
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": meta["last_timestamp"],
-                                "descriptor_id_b64": meta["descriptor_id_b64"],
-                                "hsdir_index_hrt": meta["hsdir_index_hrt"],
-                                "ring_distance": meta["ring_distance"],
-                                "ring_position": meta["ring_position"],
-                                "status": "ACTIVE_IN_RING"
-                            })
+                            fp_status = "ACTIVE_IN_RING"
+                            consider_dropped = None
 
                         else:
-                            # Node exists in consensus payload but was stripped of active capabilities
-                            
-                            if last_hour < now.hour:
-                                last_hour = now.hour
-                                current_absences = state_updates[fingerprint].get("consecutive_hourly_absences") + 1
+                            # Node exists but was stripped of active capabilities
+                            if hour_changed:
+                                current_absences = state_updates[fingerprint]["consecutive_hourly_absences"] + 1
                                 state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
-                                consider_dropped = None
-                                if current_absences >= 2:
-                                    fp_status = "DEAD_OFFLINE_CHURN"
-                                    consider_dropped = datetime.datetime.now().isoformat()
-                                else:
-                                    fp_status = "STRIPPED_HSDIR_FLAG"
-
+                                
+                            if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                                fp_status = "DEAD_OFFLINE_CHURN"
+                                consider_dropped = timestamp
+                                with hsdir_state_lock:
+                                    tracked_target_hsdirs.pop(fingerprint)
+                                    state_updates.pop(fingerprint)
+                                    with contact_cache_lock:
+                                        hsdir_contact_cache.pop(fingerprint)
                             else:
                                 fp_status = "STRIPPED_HSDIR_FLAG"
-
-                            audited_nodes.append({
-                                "fingerprint": fingerprint,
-                                "nickname": node.nickname if node.nickname else None,
-                                "ip_address": node.address if node.address else None,
-                                "or_port": node.or_port if node.or_port else None,
-                                "flags": node.flags if node.flags else None,
-                                "published": node.published.isoformat() if node.published else None,
-                                "contact_info": contact_string,       # Structural Sybil Flag Vector
-                                "declared_family": family_list,       # Structural Sybil Flag Vector
-                                "mapped_onion": meta["associated_onion"],
-                                "service_type": meta["service_type"],
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": meta["last_timestamp"],
-                                "descriptor_id_b64": meta["descriptor_id_b64"],
-                                "hsdir_index_hrt": meta["hsdir_index_hrt"],
-                                "ring_distance": meta["ring_distance"],
-                                "ring_position": meta["ring_position"],
-                                "timestamp_dropped": consider_dropped,
-                                "status": fp_status
-                            })
-                    
-                    except Exception:
-                        # Node has fallen out of the active consensus entirely (Churn Event)
-                        if last_hour < now.hour:
-                            last_hour = now.hour
-                            current_absences = state_updates[fingerprint].get("consecutive_hourly_absences") + 1
-                            state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
-                            consider_dropped = None
-                            if current_absences >= 2:
-                                fp_status = "DEAD_OFFLINE_CHURN"
-                                consider_dropped = datetime.datetime.now().isoformat()
-                            else:
-                                fp_status = "OFFLINE_CHURN"
-
-                        else:
-                            fp_status = "OFFLINE_CHURN"
+                                consider_dropped = None
 
                         audited_nodes.append({
                             "fingerprint": fingerprint,
@@ -583,8 +518,49 @@ def consensus_monitor():
                             "or_port": node.or_port if node.or_port else None,
                             "flags": node.flags if node.flags else None,
                             "published": node.published.isoformat() if node.published else None,
-                            "contact_info": contact_string,       # Structural Sybil Flag Vector
-                            "declared_family": family_list,       # Structural Sybil Flag Vector
+                            "contact_info": contact_string,                                             # Structural Sybil Flag Vector
+                            "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                            "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
+                            "mapped_onion": meta["associated_onion"],
+                            "service_type": meta["service_type"],
+                            "first_discovery": meta["first_discovery"],
+                            "last_timestamp": meta["last_timestamp"],
+                            "descriptor_id_b64": meta["descriptor_id_b64"],
+                            "hsdir_index_hrt": meta["hsdir_index_hrt"],
+                            "ring_distance": meta["ring_distance"],
+                            "ring_position": meta["ring_position"],
+                            "timestamp_dropped": consider_dropped,
+                            "status": fp_status
+                        })
+                    
+                    except Exception:
+                        # Node has fallen out of the active consensus entirely (churn event)
+                        if hour_changed:
+                            current_absences = state_updates[fingerprint]["consecutive_hourly_absences"] + 1
+                            state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
+                            
+                        if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                            fp_status = "DEAD_OFFLINE_CHURN"
+                            consider_dropped = timestamp
+                            with hsdir_state_lock:
+                                tracked_target_hsdirs.pop(fingerprint)
+                                state_updates.pop(fingerprint)
+                                with contact_cache_lock:
+                                    hsdir_contact_cache.pop(fingerprint)
+                        else:
+                            fp_status = "OFFLINE_CHURN"
+                            consider_dropped = None
+
+                        audited_nodes.append({
+                            "fingerprint": fingerprint,
+                            "nickname": node.nickname if node.nickname else None,
+                            "ip_address": node.address if node.address else None,
+                            "or_port": node.or_port if node.or_port else None,
+                            "flags": node.flags if node.flags else None,
+                            "published": node.published.isoformat() if node.published else None,
+                            "contact_info": contact_string,                                             # Structural Sybil Flag Vector
+                            "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                            "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
                             "mapped_onion": meta["associated_onion"],
                             "service_type": meta["service_type"],
                             "first_discovery": meta["first_discovery"],
@@ -597,26 +573,22 @@ def consensus_monitor():
                             "status": fp_status
                         })
 
+                    time.sleep(random.uniform(0.2,1.2))
+
                 save_json_log("hsdir_consensus_snapshots.json", {
-                    "timestamp": datetime.datetime.now().isoformat(),
+                    "timestamp": timestamp,
                     "total_active_hsdirs": len(audited_nodes),
                     "relays": audited_nodes
                 })
 
-                print(f"[AUDITOR] Audit completed. Logs committed to hsdir_consensus_snapshots.json.")            
+                print(f"[AUDITOR] Audit completed. Logs committed to hsdir_consensus_snapshots.json.")
 
-                # Check for historical nodes crossing the 3-hour definitive offline threshold
-                with hsdir_state_lock:
-                    if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
-                        tracked_target_hsdirs.pop(fingerprint)
-                        state_updates.pop(fingerprint)
-                        with contact_cache_lock:
-                            hsdir_contact_cache.pop(fingerprint)
+                if hour_changed:
+                    last_hour = now.hour            
 
             else:
-                # Prevent silent gaps: Log a baseline verification record if no nodes are discovered yet
                 save_json_log("hsdir_consensus_snapshots.json", {
-                    "timestamp": datetime.datetime.now().isoformat(),
+                    "timestamp": timestamp,
                     "active_targets_count": 0,
                     "status": "AWAITING_FIRST_DESCRIPTOR_EVENT"
                 })
@@ -626,13 +598,8 @@ def consensus_monitor():
             print(f"[AUDITOR ERROR] Main monitoring thread loop exception: {e}")
             traceback.print_exc()
 
-        # Passive wait tracking interval cleanly
-        # for _ in range(CONSENSUS_INTERVAL):
-        #     if SHUTDOWN_FLAG: break
-        #     time.sleep(1)
-
-# 4. Scale-Optimized Loop: Drives 50 Ephemeral Onions Simultaneously = Scales out 800 HR reference points
 def scaled_ephemeral_manager():
+    # Scaled ephemeral onions manager: Drives 50 Ephemeral Onions
     global SHUTDOWN_FLAG, active_ephemerals
 
     print("[INIT] Launching ephemeral cryptographic generator...")
@@ -644,7 +611,7 @@ def scaled_ephemeral_manager():
 
     while not SHUTDOWN_FLAG:
         try:
-            # Step A: Clean up any old ephemerals safely
+            # Remove any old ephemerals
             with ephemeral_lock:
                 expired_onions = list(active_ephemerals)
             
@@ -658,36 +625,30 @@ def scaled_ephemeral_manager():
                 with ephemeral_lock:
                     active_ephemerals.clear()
             
-            # Step B: Bulk instantiate 50 fresh services across the ring spectrum
+            # Instantiate 50 fresh services
             print(f"[SCALE] Spawning {NUM_EPHEMERALS} concurrent v3 ephemeral targets...")
             for i in range(NUM_EPHEMERALS):
                 if SHUTDOWN_FLAG: break
-                creation_delay = int(random.uniform(5,10))
-                for _ in range(int(creation_delay)):
-                    if SHUTDOWN_FLAG: 
-                        break
-                    time.sleep(1)
                 try:
-                    # await_publication=False avoids blocking execution threads
                     response = conn.create_ephemeral_hidden_service({80: 8130 + i}, key_content = 'ED25519-V3', await_publication=False)
                     with ephemeral_lock:
                         active_ephemerals.add(response.service_id)
                 except Exception as e:
                     print(f"[ERROR - BULK SPAWN ALLOCATION SLOT {i}]: {e}")
+
+                time.sleep(random.uniform(4.5,9.5))
             
-            print(f"[SCALE] Bulk deployment complete. {len(active_ephemerals)} active monitoring targets.")
+            print(f"[SCALE] Deployment complete. {len(active_ephemerals)} active monitoring targets.")
             
         except Exception as e:
             print(f"[ERROR - ENGINE LOOP]: {e}")
             traceback.print_exc()
             
-        # Hold positions open to collect behavioral metrics before changing targets
-        base_rotation_window = ROTATION_INTERVAL + int(random.uniform(-900, 900))
+        base_rotation_window = ROTATION_INTERVAL + int(random.uniform(-280, 280))
         for _ in range(base_rotation_window):
             if SHUTDOWN_FLAG: break
             time.sleep(1)
 
-    # Emergency Final Exit Cleanup
     print("[CLEANUP] Finalizing framework teardown...")
     for onion_id in list(active_ephemerals):
         try: conn.remove_ephemeral_hidden_service(onion_id)
@@ -713,10 +674,10 @@ def main():
     
     try:
         test_conn = get_authenticated_controller()
-        print(f"[INIT] Successfully validated control port {CONTROL_PORT} access and credentials.")
+        print(f"[INIT] Validated control port {CONTROL_PORT} access.")
         test_conn.close()
     except Exception as e:
-        print(f"[FATAL SETUP ERROR] Cannot establish connection to Tor daemon over port 9051: {e}")
+        print(f"[FATAL ERROR] Cannot establish connection to Tor daemon over port 9051: {e}")
         traceback.print_exc()
         sys.exit(1)
 
