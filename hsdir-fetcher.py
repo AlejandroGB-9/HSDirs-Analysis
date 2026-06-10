@@ -206,6 +206,7 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                 "hsdir_index_hrt": meta["hsdir_index_hrt"],
                 "ring_distance": meta["ring_distance"],
                 "ring_position": meta["ring_position"],
+                "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                 "timestamp_dropped": consider_dropped,
                 "status": fp_status
             })
@@ -242,6 +243,7 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                 "hsdir_index_hrt": meta["hsdir_index_hrt"],
                 "ring_distance": meta["ring_distance"],
                 "ring_position": meta["ring_position"],
+                "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                 "timestamp_dropped": consider_dropped,
                 "status": fp_status
             })
@@ -549,10 +551,6 @@ def consensus_monitor():
         print(f"[CRITICAL] Consensus channel connection dropped: {e}")
         return
 
-    for _ in range(int(180)):
-        if SHUTDOWN_FLAG: break
-        time.sleep(1)
-
     last_hour = datetime.datetime.now(datetime.UTC).hour
     rotated_hsdirs = {}
     state_updates = {}
@@ -697,6 +695,7 @@ def consensus_monitor():
                             "hsdir_index_hrt": meta["hsdir_index_hrt"],
                             "ring_distance": meta["ring_distance"],
                             "ring_position": meta["ring_position"],
+                            "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                             "timestamp_dropped": consider_dropped,
                             "status": fp_status
                         })
@@ -737,6 +736,7 @@ def consensus_monitor():
                             "hsdir_index_hrt": meta["hsdir_index_hrt"],
                             "ring_distance": meta["ring_distance"],
                             "ring_position": meta["ring_position"],
+                            "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                             "timestamp_dropped": consider_dropped,
                             "status": fp_status
                         })
