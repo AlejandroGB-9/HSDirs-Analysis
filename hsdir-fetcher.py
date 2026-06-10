@@ -46,9 +46,9 @@ PROBE_INTERVAL = 1200            # 20-min interval between active probes
 # Collection of onion services to query
 with open('target_onions/owned_onions.json', 'r', encoding='utf-8') as f: OWNED_STATIC_ONIONS = json.load(f)
 with open('target_onions/third_party_onions.json', 'r', encoding='utf-8') as f: THIRD_PARTY_ONIONS = json.load(f)
-
+with open('target_onions/testing_onions.json', 'r', encoding='utf-8') as f: TEST_ONIONS = json.load(f)
 # Collection of file to create thread-safety locks (bottleneck issues)
-ACCEPTED_LOG_FILES = ["hsdir_contact_history.json", "hsdir_ring_events.json", "prober_errors.json", "hsdir_consensus_snapshots.json"]
+ACCEPTED_LOG_FILES = ["hsdir_contact_history.json", "hsdir_ring_events.json", "prober_errors.json", "hsdir_consensus_snapshots.json", "rotated_hsdir_consensus_snapshots.json"]
 
 # Global condition and default log directory
 SHUTDOWN_FLAG = False
@@ -62,7 +62,6 @@ for _ in ACCEPTED_LOG_FILES:
     file_write_locks[_] = threading.Lock()
 
 # Collection of thread-data specific locks (deadlock-starvation issues) 
-registry_lock = threading.Lock()
 hsdir_state_lock = threading.Lock()
 ephemeral_lock = threading.Lock()
 contact_cache_lock = threading.Lock()
@@ -123,6 +122,139 @@ def calculate_ring_distance(hsdir_index_hex, onion_target_index_hex):
         return distance, round((distance / RING_SIZE) * 100, 2)
     except Exception:
         return None
+
+def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp):
+
+    try:
+        conn = get_authenticated_controller()
+    except Exception as e:
+        print(f"[CRITICAL] Consensus channel connection dropped: {e}")
+        return
+
+    audited_nodes = []
+    for fingerprint, meta in rotated_hsdirs.items():
+        if SHUTDOWN_FLAG: break
+        if state_updates.get(fingerprint) is None:
+            state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
+        try:
+            node = conn.get_network_status(fingerprint)
+            # Fetch server full and micro descriptors to query Sybil identity markers (effective family and contact info)
+            server_desc = conn.get_microdescriptor(fingerprint, default=None)
+            declared_family = getattr(server_desc, 'family', None) if server_desc else None
+            family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+            declared_family_id = getattr(server_desc, 'family_ids', None)
+
+            if not declared_family_id and server_desc:
+                for line in server_desc.get_unrecognized_lines():
+                    if line.startswith("family-ids "):
+                        # Split off the token prefix and capture all space-separated IDs
+                        declared_family_id = line.strip().split()[1:]
+                        break
+
+            if not declared_family_id and server_desc:
+                try:
+                    for line in server_desc.get_text().splitlines():
+                        if line.startswith("family-ids "):
+                            declared_family_id = line.strip().split()[1:]
+                            break
+                except Exception:
+                    pass
+
+            if declared_family_id:
+                declared_family_id = declared_family_id[0].replace("ed25519:", "")
+
+            if not declared_family_id:
+                declared_family_id = None
+
+            contact_string = get_relay_contact_info(conn, fingerprint, node, now) 
+
+            if "HSDir" in node.flags:
+
+                state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
+                fp_status = "ACTIVE_IN_RING"
+                consider_dropped = None
+
+            else:
+                # Node exists but was stripped of active capabilities
+                if hour_changed:
+                    current_absences = state_updates[fingerprint]["consecutive_hourly_absences"] + 1
+                    state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
+                    
+                if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                    fp_status = "DEAD_OFFLINE_CHURN"
+                    consider_dropped = timestamp
+                
+                else:
+                    fp_status = "STRIPPED_HSDIR_FLAG"
+                    consider_dropped = None
+
+            audited_nodes.append({
+                "fingerprint": fingerprint,
+                "nickname": node.nickname if node.nickname else None,
+                "ip_address": node.address if node.address else None,
+                "or_port": node.or_port if node.or_port else None,
+                "flags": node.flags if node.flags else None,
+                "published": node.published.isoformat() if node.published else None,
+                "contact_info": contact_string,                                             # Structural Sybil Flag Vector
+                "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
+                "last_known_onion": meta["associated_onion"],
+                "service_type": meta["service_type"],
+                "first_discovery": meta["first_discovery"],
+                "last_timestamp": meta["last_timestamp"],
+                "descriptor_id_b64": meta["descriptor_id_b64"],
+                "hsdir_index_hrt": meta["hsdir_index_hrt"],
+                "ring_distance": meta["ring_distance"],
+                "ring_position": meta["ring_position"],
+                "timestamp_dropped": consider_dropped,
+                "status": fp_status
+            })
+        
+        except Exception:
+            # Node has fallen out of the active consensus entirely (churn event)
+            if hour_changed:
+                current_absences = state_updates[fingerprint]["consecutive_hourly_absences"] + 1
+                state_updates[fingerprint] = {"consecutive_hourly_absences": current_absences}
+                
+            if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                fp_status = "DEAD_OFFLINE_CHURN"
+                consider_dropped = timestamp
+        
+            else:
+                fp_status = "OFFLINE_CHURN"
+                consider_dropped = None
+
+            audited_nodes.append({
+                "fingerprint": fingerprint,
+                "nickname": node.nickname if node.nickname else None,
+                "ip_address": node.address if node.address else None,
+                "or_port": node.or_port if node.or_port else None,
+                "flags": node.flags if node.flags else None,
+                "published": node.published.isoformat() if node.published else None,
+                "contact_info": contact_string,                                             # Structural Sybil Flag Vector
+                "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
+                "last_known_onion": meta["associated_onion"],
+                "service_type": meta["service_type"],
+                "first_discovery": meta["first_discovery"],
+                "last_timestamp": meta["last_timestamp"],
+                "descriptor_id_b64": meta["descriptor_id_b64"],
+                "hsdir_index_hrt": meta["hsdir_index_hrt"],
+                "ring_distance": meta["ring_distance"],
+                "ring_position": meta["ring_position"],
+                "timestamp_dropped": consider_dropped,
+                "status": fp_status
+            })
+
+        time.sleep(random.uniform(0.2,1.2))
+
+    save_json_log("rotated_hsdir_consensus_snapshots.json", {
+        "timestamp": timestamp,
+        "total_rotated_hsdirs": len(audited_nodes),
+        "relays": audited_nodes
+    })
+
+    conn.close()
 
 def get_relay_contact_info(conn, fingerprint, node, utc_time):
     # Remote lookahead for contact information of a fingerprint
@@ -307,6 +439,8 @@ def hs_desc_event_listener(event):
                     "ring_position": ring_position,
                 }
             else:
+                tracked_target_hsdirs[hsdir_fp]["associated_onion"] = full_onion_address
+                tracked_target_hsdirs[hsdir_fp]["service_type"] = service_type
                 tracked_target_hsdirs[hsdir_fp]["last_known_action"] = event.action
                 tracked_target_hsdirs[hsdir_fp]["last_timestamp"] = actual_timestamp
                 tracked_target_hsdirs[hsdir_fp]["descriptor_id_b64"] = descriptor_id if descriptor_id else tracked_target_hsdirs[hsdir_fp]["descriptor_id_b64"]
@@ -360,7 +494,8 @@ def active_prober():
             with ephemeral_lock:
                 current_ephemerals = [f"{uid}.onion" for uid in active_ephemerals]
             
-            ONIONS_TO_QUERY = OWNED_STATIC_ONIONS + THIRD_PARTY_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
+            #ONIONS_TO_QUERY = OWNED_STATIC_ONIONS + THIRD_PARTY_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
+            ONIONS_TO_QUERY = TEST_ONIONS
 
             for onion_id in ONIONS_TO_QUERY:
 
@@ -419,6 +554,8 @@ def consensus_monitor():
         time.sleep(1)
 
     last_hour = datetime.datetime.now(datetime.UTC).hour
+    rotated_hsdirs = {}
+    state_updates = {}
 
     print("[CONSENSUS] Consensus tracking engine started.")
     
@@ -428,17 +565,48 @@ def consensus_monitor():
 
             # Time calculation to find the remaining window until XX:05 UTC
             now = datetime.datetime.now(datetime.UTC)
-            timestamp = datetime.datetime.now().isoformat()
 
             if now.minute >= 5:
-                next_sync = (now + datetime.timedelta(hours=1)).replace(minute=5, second=0, microsecond=0)
+                next_sync = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
             else:
-                next_sync = now.replace(minute=5, second=0, microsecond=0)
+                next_sync = now.replace(minute=0, second=0, microsecond=0)
             
             time_until_sync = (next_sync - now).total_seconds()
             
             if 0 < time_until_sync:
                 for _ in range(int(time_until_sync)):
+                    if SHUTDOWN_FLAG: break
+                    time.sleep(1)
+
+            now = datetime.datetime.now(datetime.UTC)
+            timestamp = datetime.datetime.now().isoformat()
+
+            # Refresh + rotated status HSDirs
+            if now.hour == 0:
+                if tracked_target_hsdirs:
+                    with hsdir_state_lock:
+                        rotated_hsdirs = dict(tracked_target_hsdirs)
+                        hour_changed = (last_hour != now.hour)
+                        rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp)
+                        tracked_target_hsdirs = {}
+                        rotated_hsdirs = {}
+                        state_updates = {}
+                else:
+                    with hsdir_state_lock:
+                        tracked_target_hsdirs = {}
+                        rotated_hsdirs = {}
+                        state_updates = {}
+                if hsdir_contact_cache:
+                    with contact_cache_lock:
+                        hsdir_contact_cache = {}
+
+                # Timer of 3-min to properly populate with fingerprints after rotation
+                for _ in range(300):
+                    if SHUTDOWN_FLAG: break
+                    time.sleep(1)
+
+            else:
+                for _ in range(300):
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
 
@@ -448,15 +616,15 @@ def consensus_monitor():
             if target_fingerprints:
                 print(f"[AUDITOR] Executing localized stability audit on {len(target_fingerprints)} target HSDirs...")
                 audited_nodes = []
-                state_updates = {}
 
                 hour_changed = (last_hour != now.hour)
 
                 for fingerprint, meta in target_fingerprints.items():
                     if SHUTDOWN_FLAG: break
+                    if state_updates.get(fingerprint) is None:
+                        state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
                     try:
                         node = conn.get_network_status(fingerprint)
-
                         # Fetch server full and micro descriptors to query Sybil identity markers (effective family and contact info)
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
                         declared_family = getattr(server_desc, 'family', None) if server_desc else None
