@@ -174,7 +174,7 @@ hmargin=1.5cm
 			\bigskip
 			
 		\end{Large}
-		 	{\Huge ``Security Analysis of Modern Tor Hidden Services"}\\
+		 	{\Huge ``Security Analysis of Modern Tor V3 Hidden Service Directories"}\\
 		 	\vspace*{0.5cm}
 	 		\rule{10.5cm}{0.1mm}\\
 			\vspace*{2cm}
@@ -202,7 +202,7 @@ hmargin=1.5cm
 
 
 
-\title{Security Analysis of Modern Tor Hidden Services}
+\title{Security Analysis of Modern Tor V3 Hidden Service Directories}
 
 \author{\IEEEauthorblockN{Alejandro García Berrocal}
 \IEEEauthorblockA{\textit{Student}, \textit{Carlos III University}, Madrid, Spain,\\
@@ -212,7 +212,7 @@ hmargin=1.5cm
 \maketitle
 
 \begin{abstract}
-Introduce a resume of the overall motivation of the work.
+TODO
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -220,148 +220,82 @@ Tor, Hidden Services, HSDirs, Cybersecurity, Privacy, Analysis, Churn, Sybil pat
 \end{IEEEkeywords}
 
 \section{Introduction}
-This document is a model and instructions for \LaTeX.
-Please observe the conference page limits. 
+The Tor Project, commonly known as Tor, it is, if not the most, the preferred network overlay to provide 
+an anonymous communication network. In 2003 the developers introduced an anonymity mechanism to protect
+the service providers, onion services, on the Tor network, that was later deployed in 2004 as the version 2 (V2)
+of the onion services. (TODO: USE REF 1 OF DOC)
 
-\section{Ease of Use}
+Each onion service generates an address when started, a domain name, used by Tor clients to access the service.
+To achieve a communication between a client and an onion service a two-way anonymous communication is established
+over a 6-hop circuit, beaing each hop a Tor node. Nonetheless, Tor deprecates the version 2 protocol
+in 2021 (TODO: USE REF 2 OF DOC), and migrates to the third version of onion services (V3) due to the 
+different issues caused by the V2 protocol. Among these issues are included, (TODO: INCLUDE PROBLEMS). The
+newly deployed V3 protocol assesses these issues including avoiding direct exposure of onion services to
+Hidden Service Directories, now onward referred as HSDirs, which may abuse of onion services.
 
-\subsection{Maintaining the Integrity of the Specifications}
+To understand the current situation of HSDirs security, a set of onion services, consisting of personal onion services static
+and ephemeral, and third party onion services, is put under a 30-days public data gathering of HSDirs on the network hosting the 
+onion services descriptors, and perform a comprehensive analysis to shed light on the current security regarding
+hosting HSDirs (Tor relays) on the Tor network. 
 
-The IEEEtran class file is used to format your paper and style the text. All margins, 
-column widths, line spaces, and text fonts are prescribed; please do not 
-alter them. You may note peculiarities. For example, the head margin
-measures proportionately more than is customary. This measurement 
-and others are deliberate, using specifications that anticipate your paper 
-as one part of the entire proceedings, and not as an independent document. 
-Please do not revise any of the current designations.
+TODO: Explanation of what it's been done
+\section{Tor Onion Hidden Services Mechanism}
 
-\section{Prepare Your Paper Before Styling}
-Before you begin to format your paper, first write and save the content as a 
-separate text file. Complete all content and organizational editing before 
-formatting. Please note sections \ref{AA}--\ref{SCM} below for more information on 
-proofreading, spelling and grammar.
+This section presents the Tor's onion service V3 protocol with an overview of the essential parties of the
+mechanism, including the onion services address generation, publication and connection establishment. (TODO: USE TOR OFFICIAL DOCS AS REF)
 
-Keep your text and graphic files separate until after the text has been 
-formatted and styled. Do not number text heads---{\LaTeX} will do that 
-for you.
+\subsection{Mechanism Overview}
 
-\subsection{Abbreviations and Acronyms}\label{AA}
-Define abbreviations and acronyms the first time they are used in the text, 
-even after they have been defined in the abstract. Abbreviations such as 
-IEEE, SI, MKS, CGS, ac, dc, and rms do not have to be defined. Do not use 
-abbreviations in the title or heads unless they are unavoidable.
+The mechanism refers to permiting any user to access or publish internet services in an anonymous manner,
+such as Web (HTTP) or SSH services. It involves the use of 6-type Tor nodes to establish a connection:
 
-\subsection{Units}
 \begin{itemize}
-\item Use either SI (MKS) or CGS as primary units. (SI units are encouraged.) English units may be used as secondary units (in parentheses). An exception would be the use of English units as identifiers in trade, such as ``3.5-inch disk drive''.
-\item Avoid combining SI and CGS units, such as current in amperes and magnetic field in oersteds. This often leads to confusion because equations do not balance dimensionally. If you must use mixed units, clearly state the units for each quantity that you use in an equation.
-\item Do not mix complete spellings and abbreviations of units: ``Wb/m\textsuperscript{2}'' or ``webers per square meter'', not ``webers/m\textsuperscript{2}''. Spell out units when they appear in text: ``. . . a few henries'', not ``. . . a few H''.
-\item Use a zero before decimal points: ``0.25'', not ``.25''. Use ``cm\textsuperscript{3}'', not ``cc''.)
+\item \textbf{Tor Client.} TODO: Explain
+\item \textbf{Onion Service.} TODO: Explain
+\item \textbf{Authority.} TODO: Explain
+\item \textbf{Introduction Point (IPO).} TODO: Explain
+\item \textbf{Hidden Service Directory (HSDir).} TODO: Explain
+\item \textbf{Rendezvous Point (RPO).} TODO: Explain
 \end{itemize}
 
-\subsection{Equations}
-Number equations consecutively. To make your 
-equations more compact, you may use the solidus (~/~), the exp function, or 
-appropriate exponents. Italicize Roman symbols for quantities and variables, 
-but not Greek symbols. Use a long dash rather than a hyphen for a minus 
-sign. Punctuate equations with commas or periods when they are part of a 
-sentence, as in:
-\begin{equation}
-a+b=\gamma\label{eq}
-\end{equation}
+(INCLUDE IMAGE THAT EXPLAINS THE NETWORK)
 
-Be sure that the 
-symbols in your equation have been defined before or immediately following 
-the equation. Use ``\eqref{eq}'', not ``Eq.~\eqref{eq}'' or ``equation \eqref{eq}'', except at 
-the beginning of a sentence: ``Equation \eqref{eq} is . . .''
+\begin{enumerate}
+\item \textbf{STEP 1.} TODO: Explain
+\item \textbf{STEP 2.} TODO: Explain
+\item \textbf{STEP 3.} TODO: Explain
+\item \textbf{STEP 4.} TODO: Explain
+\item \textbf{STEP 5.} TODO: Explain
+\item \textbf{STEP 6.} TODO: Explain
+\end{enumerate}
 
-\subsection{\LaTeX-Specific Advice}
+\subsection{Address Generation}
 
-Please use ``soft'' (e.g., \verb|\eqref{Eq}|) cross references instead
-of ``hard'' references (e.g., \verb|(1)|). That will make it possible
-to combine sections, add equations, or change the order of figures or
-citations without having to go through the file line by line.
+Pending
 
-Please don't use the \verb|{eqnarray}| equation environment. Use
-\verb|{align}| or \verb|{IEEEeqnarray}| instead. The \verb|{eqnarray}|
-environment leaves unsightly spaces around relation symbols.
+\subsection{Publication}\label{AA}
 
-Please note that the \verb|{subequations}| environment in {\LaTeX}
-will increment the main equation counter even when there are no
-equation numbers displayed. If you forget that, you might write an
-article in which the equation numbers skip from (17) to (20), causing
-the copy editors to wonder if you've discovered a new method of
-counting.
+Pending
 
-If you use BibTeX to produce a
-bibliography you must send the .bib files. 
+\subsection{Service Access}
 
-{\LaTeX} can't read your mind. If you assign the same label to a
-subsubsection and a table, you might find that Table I has been cross
-referenced as Table IV-B3. 
+Pending
 
-{\LaTeX} does not have precognitive abilities. If you put a
-\verb|\label| command before the command that updates the counter it's
-supposed to be using, the label will pick up the last counter to be
-cross referenced instead. In particular, a \verb|\label| command
-should not go before the caption of a figure or a table.
+\subsection{Other Sections}
 
-Do not use \verb|\nonumber| inside the \verb|{array}| environment. It
-will not stop equation numbers inside \verb|{array}| (there won't be
-any anyway) and it might stop a wanted equation number in the
-surrounding equation.
+Pending
 
-\subsection{Some Common Mistakes}\label{SCM}
-\begin{itemize}
-\item The word ``data'' is plural, not singular.
-\item The subscript for the permeability of vacuum $\mu_{0}$, and other common scientific constants, is zero with subscript formatting, not a lowercase letter ``o''.
-\item In American English, commas, semicolons, periods, question and exclamation marks are located within quotation marks only when a complete thought or name is cited, such as a title or full quotation. When quotation marks are used, instead of a bold or italic typeface, to highlight a word or phrase, punctuation should appear outside of the quotation marks. A parenthetical phrase or statement at the end of a sentence is punctuated outside of the closing parenthesis (like this). (A parenthetical sentence is punctuated within the parentheses.)
-\item A graph within a graph is an ``inset'', not an ``insert''. The word alternatively is preferred to the word ``alternately'' (unless you really mean something that alternates).
-\item Do not use the word ``essentially'' to mean ``approximately'' or ``effectively''.
-\item In your paper title, if the words ``that uses'' can accurately replace the word ``using'', capitalize the ``u''; if not, keep using lower-cased.
-\item Be aware of the different meanings of the homophones ``affect'' and ``effect'', ``complement'' and ``compliment'', ``discreet'' and ``discrete'', ``principal'' and ``principle''.
-\item Do not confuse ``imply'' and ``infer''.
-\item The prefix ``non'' is not a word; it should be joined to the word it modifies, usually without a hyphen.
-\item There is no period after the ``et'' in the Latin abbreviation ``et al.''.
-\item The abbreviation ``i.e.'' means ``that is'', and the abbreviation ``e.g.'' means ``for example''.
-\end{itemize}
-An excellent style manual for science writers is \cite{lamp94}.
+\section{Methodology}
 
-\subsection{Authors and Affiliations}
-\textbf{The class file is designed for, but not limited to, six authors.} A 
-minimum of one author is required for all conference articles. Author names 
-should be listed starting from left to right and then moving down to the 
-next line. This is the author sequence that will be used in future citations 
-and by indexing services. Names should not be listed in columns nor group by 
-affiliation. Please keep your affiliations as succinct as possible (for 
-example, do not differentiate among departments of the same organization).
+Pending
 
-\subsection{Identify the Headings}
-Headings, or heads, are organizational devices that guide the reader through 
-your paper. There are two types: component heads and text heads.
+\subsection{Overview}\label{SCM}
 
-Component heads identify the different components of your paper and are not 
-topically subordinate to each other. Examples include Acknowledgments and 
-References and, for these, the correct style to use is ``Heading 5''. Use 
-``figure caption'' for your Figure captions, and ``table head'' for your 
-table title. Run-in heads, such as ``Abstract'', will require you to apply a 
-style (in this case, italic) in addition to the style provided by the drop 
-down menu to differentiate the head from the text.
+Pending
 
-Text heads organize the topics on a relational, hierarchical basis. For 
-example, the paper title is the primary text head because all subsequent 
-material relates and elaborates on this one topic. If there are two or more 
-sub-topics, the next level head (uppercase Roman numerals) should be used 
-and, conversely, if there are not at least two sub-topics, then no subheads 
-should be introduced.
+\subsection{Others related (Consensus, Prober, etc)}
 
-\subsection{Figures and Tables}
-\paragraph{Positioning Figures and Tables} Place figures and tables at the top and 
-bottom of columns. Avoid placing them in the middle of columns. Large 
-figures and tables may span across both columns. Figure captions should be 
-below the figures; table heads should appear above the tables. Insert 
-figures and tables after they are cited in the text. Use the abbreviation 
-``Fig.~\ref{fig}'', even at the beginning of a sentence.
+Pending
 
 \begin{table}[htbp]
 \caption{Table Type Styles}
@@ -385,16 +319,6 @@ copy& More table copy$^{\mathrm{a}}$& &  \\
 \caption{Example of a figure caption.}\label{fig}
 \end{figure}
 
-Figure Labels: Use 8 point Times New Roman for Figure labels. Use words 
-rather than symbols or abbreviations when writing Figure axis labels to 
-avoid confusing the reader. As an example, write the quantity 
-``Magnetization'', or ``Magnetization, M'', not just ``M''. If including 
-units in the label, present them within parentheses. Do not label axes only 
-with units. In the example, write ``Magnetization (A/m)'' or ``Magnetization 
-\{A[m(1)]\}'', not just ``A/m''. Do not label axes with a ratio of 
-quantities and units. For example, write ``Temperature (K)'', not 
-``Temperature/K''.
-
 \section*{Acknowledgment}
 
 The preferred spelling of the word ``acknowledgment'' in America is without 
@@ -408,20 +332,6 @@ Please number citations consecutively within brackets \cite{lamp94}. The
 sentence punctuation follows the bracket. Refer simply to the reference 
 number, as in \cite{lesk77}---do not use ``Ref. \cite{lesk77}'' or ``reference \cite{lesk77}'' except at 
 the beginning of a sentence: ``Reference \cite{lesk77} was the first $\ldots$''
-
-Number footnotes separately in superscripts. Place the actual footnote at 
-the bottom of the column in which it was cited. Do not put footnotes in the 
-abstract or reference list. Use letters for table footnotes.
-
-Unless there are six authors or more give all authors' names; do not use 
-``et al.''. Papers that have not been published, even if they have been 
-submitted for publication, should be cited as ``unpublished''. Papers 
-that have been accepted for publication should be cited as ``in press''. 
-Capitalize only the first word in a paper title, except for proper nouns and 
-element symbols.
-
-For papers published in translation journals, please give the English 
-citation first, followed by the original foreign-language citation.
 
 \printbibliography
 
