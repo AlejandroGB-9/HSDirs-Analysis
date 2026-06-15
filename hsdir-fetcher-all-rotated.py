@@ -218,6 +218,10 @@ def rotated_hsdir_monitor():
         print(f"[CRITICAL] Consensus channel for rotated HSDirs connection dropped: {e}")
         return
 
+    for _ in range(120):
+        if SHUTDOWN_FLAG: break
+        time.sleep(1)
+
     last_hour = datetime.datetime.now(datetime.UTC).hour
     rotated_statuses = {}
 
@@ -257,6 +261,7 @@ def rotated_hsdir_monitor():
                 for _ in range(360):
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
+                    
             with rotated_hsdir_lock:
                 rotated = dict(rotated_hsdirs)
 
@@ -780,7 +785,7 @@ def consensus_monitor():
                             "nickname": node.nickname if node else None,
                             "ip_address": node.address if node else None,
                             "or_port": node.or_port if node else None,
-                            "flags": node.flags if node.flags else None,
+                            "flags": node.flags if node else None,
                             "published": node.published.isoformat() if node else None,
                             "contact_info": contact_string,                                             # Structural Sybil Flag Vector
                             "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector

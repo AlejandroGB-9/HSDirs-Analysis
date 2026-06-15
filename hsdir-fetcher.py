@@ -718,7 +718,7 @@ def consensus_monitor():
                             "nickname": node.nickname if node else None,
                             "ip_address": node.address if node else None,
                             "or_port": node.or_port if node else None,
-                            "flags": node.flags if node.flags else None,
+                            "flags": node.flags if node else None,
                             "published": node.published.isoformat() if node else None,
                             "contact_info": contact_string,                                             # Structural Sybil Flag Vector
                             "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
