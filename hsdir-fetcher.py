@@ -41,6 +41,13 @@ CONTROL_PORT = 9051              # Tor's Control Port
 NUM_EPHEMERALS = 50              # Scale of ephemeral onion to open
 PROBE_INTERVAL = 1200            # 20-min interval between active probes
 
+# Synchronization windows
+WINDOW_START = datetime.time(23, 55, 0)     # 23:55 UTC
+WINDOW_END = datetime.time(0, 8, 0)         # 00:08 UTC
+EPHEMERAL_START_MIN = 1                     # 00:01 UTC
+PROBER_START_MIN = 8                        # 00:08 UTC
+CONSENSUS_START_MIN = 10                    # 00:10 UTC
+
 # Collection of onion services to query
 with open('target_onions/owned_onions.json', 'r', encoding='utf-8') as f: OWNED_STATIC_ONIONS = json.load(f)
 with open('target_onions/third_party_onions.json', 'r', encoding='utf-8') as f: THIRD_PARTY_ONIONS = json.load(f)
@@ -88,25 +95,40 @@ def get_authenticated_controller():
     controller.authenticate()
     return controller
 
-def run_event_listener():
-    print("[INIT] Launching dedicated event registration pipe...")
-    try:
-        conn = get_authenticated_controller()
+def is_inside_window():
+    now_utc = datetime.datetime.now(datetime.UTC).time()
+    if WINDOW_START <= WINDOW_END:
+        return WINDOW_START <= now_utc <= WINDOW_END
+    else:  # Crosses midnight boundary
+        return now_utc >= WINDOW_START or now_utc <= WINDOW_END
+
+def until_next_cycle(hour, minute):
+    global SHUTDOWN_FLAG
+    while not SHUTDOWN_FLAG:
         now = datetime.datetime.now(datetime.UTC)
-        next_sync = (now + datetime.timedelta(days=1)).replace(hour=0, minute=2, second=0, microsecond=0)
-        time_until_sync = (next_sync - now).total_seconds()
-        if 0 < time_until_sync:
-            for _ in range(int(time_until_sync)):
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += datetime.timedelta(days=1)
+        
+        time_to_wait = (target - now).total_seconds()
+        if time_to_wait > 0:
+            for _ in range(int(time_to_wait)):
                 if SHUTDOWN_FLAG: break
                 time.sleep(1)
+
+def run_event_listener():
+    print("[INIT] Launching dedicated event registration pipe...")
+    until_next_cycle(0, PROBER_START_MIN)
+    if SHUTDOWN_FLAG: return
+    try:
+        conn = get_authenticated_controller()
         conn.add_event_listener(hs_desc_event_listener, EventType.HS_DESC)
         while not SHUTDOWN_FLAG:
             time.sleep(1)
+        conn.close()
     except Exception as e:
         print(f"[CRITICAL] Event listener stream failed to register: {e}")
         traceback.print_exc()
-    
-    conn.close()
 
 def signal_handler(sig, frame):
     global SHUTDOWN_FLAG
@@ -349,12 +371,7 @@ def hs_desc_event_listener(event):
     # Asynchronous Event Monitor: Get hash ring positions and targets
     global tracked_target_hsdirs, active_ephemerals
 
-    window_start = datetime.time(23, 56)
-    window_end = datetime.time(0, 6)
-
-    now = datetime.datetime.now(datetime.UTC).time()
-
-    if (now >= window_start or now <= window_end):
+    if is_inside_blackout():
         return
 
     if SHUTDOWN_FLAG: return
@@ -497,9 +514,6 @@ def active_prober():
     # Active onion prober
     global SHUTDOWN_FLAG
 
-    window_start = datetime.time(23, 56)
-    window_end = datetime.time(0, 6)
-
     print("[INIT] Launching isolated uncached HSFETCH network channel...")
 
     try:
@@ -510,16 +524,14 @@ def active_prober():
 
     print("[PROBER] Active tracking loop initialized for endpoints.")
 
-    now = datetime.datetime.now(datetime.UTC)
-    next_sync = (now + datetime.timedelta(days=1)).replace(hour=0, minute=3, second=0, microsecond=0)
-    time_until_sync = (next_sync - now).total_seconds()
-    
-    if 0 < time_until_sync:
-        for _ in range(int(time_until_sync)):
-            if SHUTDOWN_FLAG: break
-            time.sleep(1)
+    until_next_cycle(0, PROBER_START_MIN)
 
     while not SHUTDOWN_FLAG:
+
+        if is_inside_blackout():
+            print("[PROBER] Within ring migration blackout window. Hibernating probing operations...")
+            wait_until_next_utc(0, PROBER_START_MIN)
+            if SHUTDOWN_FLAG: break
 
         try:
 
@@ -530,26 +542,8 @@ def active_prober():
 
             for onion_id in ONIONS_TO_QUERY:
 
-                now = datetime.datetime.now(datetime.UTC)
-
-                if (now.time() >= start or now.time() <= end):
-                    if now.time() <= end:
-                        next_sync = (now + datetime.timedelta(hours=0)).replace(minute=6, second=0, microsecond=0)
-                        time_until_sync = (next_sync - now).total_seconds()
-                        for _ in range(round(time_until_sync)):
-                            if SHUTDOWN_FLAG: break
-                            time.sleep(1)
-                        break
-                        
-                    else:
-                        next_sync = (now + datetime.timedelta(hours=1)).replace(minute=6, second=0, microsecond=0)
-                        time_until_sync = (next_sync - now).total_seconds()
-                        for _ in range(round(time_until_sync)):
-                            if SHUTDOWN_FLAG: break
-                            time.sleep(1)
-                        break
-
-                if SHUTDOWN_FLAG: break
+                if SHUTDOWN_FLAG or is_inside_blackout():
+                    break
 
                 raw_onion = onion_id.replace(".onion", "")
 
@@ -586,6 +580,8 @@ def active_prober():
         for _ in range(PROBE_INTERVAL):
             if SHUTDOWN_FLAG: break
             time.sleep(1)
+    
+    conn.close()
 
 def consensus_monitor():
     # Consensus Monitor: Tracks known network HSDir churn, IP ranges, and stability
@@ -600,7 +596,6 @@ def consensus_monitor():
         return
 
     last_hour = datetime.datetime.now(datetime.UTC).hour
-    rotated_hsdirs = {}
     state_updates = {}
 
     print("[CONSENSUS] Consensus tracking engine started.")
@@ -608,7 +603,6 @@ def consensus_monitor():
     while not SHUTDOWN_FLAG:
 
         try:
-
             # Time calculation to find the remaining window until XX:05 UTC
             now = datetime.datetime.now(datetime.UTC)
             next_sync = (now + datetime.timedelta(hours=1)).replace(minute=5, second=0, microsecond=0)
@@ -618,28 +612,30 @@ def consensus_monitor():
                 for _ in range(int(time_until_sync)):
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
+                
+            if SHUTDOWN_FLAG: break
 
             now = datetime.datetime.now(datetime.UTC)
             timestamp = datetime.datetime.now().isoformat()
 
             # Refresh + rotated status HSDirs
             if now.hour == 0:
+                print("[AUDITOR] 00:05 UTC - Processing stable historical ring states...")
                 if tracked_target_hsdirs:
                     with hsdir_state_lock:
                         rotated_hsdirs = dict(tracked_target_hsdirs)
                         hour_changed = (last_hour != now.hour)
                         rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp)
                         tracked_target_hsdirs.clear()
-                        rotated_hsdirs.clear()
                         state_updates.clear()
                 if hsdir_contact_cache:
                     with contact_cache_lock:
                         hsdir_contact_cache.clear()
 
-                # Timer of 3-min to properly populate with fingerprints after rotation
-                for _ in range(180):
-                    if SHUTDOWN_FLAG: break
-                    time.sleep(1)
+                # Time window to populate with fingerprints after rotation
+                wait_until_next_utc(0, CONSENSUS_START_MIN)
+                last_hour = 0
+                continue
 
             with hsdir_state_lock:
                 target_fingerprints = dict(tracked_target_hsdirs)
@@ -814,14 +810,7 @@ def scaled_ephemeral_manager():
         print(f"[CRITICAL] Ephemeral controller link dropped: {e}")
         return
 
-    now = datetime.datetime.now(datetime.UTC)
-    next_sync = (now + datetime.timedelta(days=1)).replace(hour=0, minute=2, second=0, microsecond=0)
-    time_until_sync = (next_sync - now).total_seconds()
-    
-    if 0 < time_until_sync:
-        for _ in range(int(time_until_sync)):
-            if SHUTDOWN_FLAG: break
-            time.sleep(1)
+    until_next_cycle(0, EPHEMERAL_START_MIN)
 
     while not SHUTDOWN_FLAG:
         try:
@@ -858,19 +847,13 @@ def scaled_ephemeral_manager():
             print(f"[ERROR - ENGINE LOOP]: {e}")
             traceback.print_exc()
             
-        now = datetime.datetime.now(datetime.UTC)
-        next_sync = (now + datetime.timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
-        time_until_sync = (next_sync - now).total_seconds()
-        
-        if 0 < time_until_sync:
-            for _ in range(int(time_until_sync)):
-                if SHUTDOWN_FLAG: break
-                time.sleep(1)
+        until_next_cycle(0, EPHEMERAL_START_MIN)
 
     print("[CLEANUP] Finalizing framework teardown...")
-    for onion_id in list(active_ephemerals):
-        try: conn.remove_ephemeral_hidden_service(onion_id)
-        except: pass
+    with ephemeral_lock:
+        for onion_id in list(active_ephemerals):
+            try: conn.remove_ephemeral_hidden_service(onion_id)
+            except: pass
     
     conn.close()
 
