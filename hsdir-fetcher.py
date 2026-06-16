@@ -156,7 +156,7 @@ def get_relay_contact_info(conn, fingerprint, node):
     global hsdir_contact_cache
 
     with contact_cache_lock:
-        cache_entry = hsdir_contact_cache.get(fingerprint)
+        cache_entry = hsdir_contact_cache[fingerprint]
 
     needs_remote_fetch = False
     contact_string = "None Specified"
@@ -229,7 +229,7 @@ def get_relay_contact_info(conn, fingerprint, node):
     
     return contact_string
 
-def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp):
+def rotated_hsdir_monitor(rotated_hsdirs, state_updates, known_contacts, hour_changed, timestamp):
 
     try:
         conn = get_authenticated_controller()
@@ -277,7 +277,7 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                 if not declared_family_id:
                     declared_family_id = None
 
-                contact_string = get_relay_contact_info(conn, fingerprint, node) 
+                contact_string = known_contacts[fingerprint]["contact"] 
 
                 if "HSDir" in node.flags:
 
@@ -622,19 +622,28 @@ def consensus_monitor():
             # Refresh + rotated status HSDirs
             if now.hour == 0:
                 print("[AUDITOR] 00:05 UTC - Processing historical HSDirs states...")
-                if tracked_target_hsdirs:
+                if tracked_target_hsdirs and hsdir_contact_cache:
                     with hsdir_state_lock:
                         rotated_hsdirs = dict(tracked_target_hsdirs)
-                        hour_changed = (last_hour != now.hour)
-                        rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp)
+                        rotated_updates = dict(state_updates)
                         tracked_target_hsdirs.clear()
                         state_updates.clear()
-                if hsdir_contact_cache:
                     with contact_cache_lock:
+                        known_contacts = dict(hsdir_contact_cache)
                         hsdir_contact_cache.clear()
 
+                    hour_changed = (last_hour != now.hour)
+                    rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, known_contacts, hour_changed, timestamp)
+                        
+                minute_check = datetime.datetime.now(datetime.UTC).minute
+                if minute_check >= CONSENSUS_START_MIN:
+                    for _ in range(180):
+                        if SHUTDOWN_FLAG: break
+                        time.sleep(1)
                 # Time window to populate with fingerprints after rotation
-                until_next_cycle(0, CONSENSUS_START_MIN)
+                else:
+                    until_next_cycle(0, CONSENSUS_START_MIN)
+                
                 last_hour = 0
                 continue
 
