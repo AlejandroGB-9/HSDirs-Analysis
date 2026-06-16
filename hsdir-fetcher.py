@@ -31,6 +31,7 @@ import random
 import re
 import base64
 import ast
+import math
 
 # Stem library required dependencies
 from stem.control import Controller, EventType
@@ -104,17 +105,16 @@ def is_inside_window():
 
 def until_next_cycle(hour, minute):
     global SHUTDOWN_FLAG
-    while not SHUTDOWN_FLAG:
-        now = datetime.datetime.now(datetime.UTC)
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if target <= now:
-            target += datetime.timedelta(days=1)
-        
-        time_to_wait = (target - now).total_seconds()
-        if time_to_wait > 0:
-            for _ in range(int(time_to_wait)):
-                if SHUTDOWN_FLAG: break
-                time.sleep(1)
+    now = datetime.datetime.now(datetime.UTC)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    
+    time_to_wait = (target - now).total_seconds()
+    if time_to_wait > 0:
+        for _ in range(math.ceil(time_to_wait)):
+            if SHUTDOWN_FLAG: break
+            time.sleep(1)
 
 def run_event_listener():
     print("[INIT] Launching dedicated event registration pipe...")
@@ -160,7 +160,7 @@ def get_relay_contact_info(conn, fingerprint, node):
 
     needs_remote_fetch = False
     contact_string = "None Specified"
-    timestamp = datetime.datetime.now().isoformat()
+    timestamp = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
     if not cache_entry:
         needs_remote_fetch = True
@@ -371,7 +371,7 @@ def hs_desc_event_listener(event):
     # Asynchronous Event Monitor: Get hash ring positions and targets
     global tracked_target_hsdirs, active_ephemerals
 
-    if is_inside_blackout():
+    if is_inside_window():
         return
 
     if SHUTDOWN_FLAG: return
@@ -459,7 +459,7 @@ def hs_desc_event_listener(event):
             except Exception:
                 pass
 
-        actual_timestamp = datetime.datetime.now().isoformat()
+        actual_timestamp = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
         with hsdir_state_lock:
             if hsdir_fp not in tracked_target_hsdirs:
@@ -528,8 +528,7 @@ def active_prober():
 
     while not SHUTDOWN_FLAG:
 
-        if is_inside_blackout():
-            print("[PROBER] Within ring migration blackout window. Hibernating probing operations...")
+        if is_inside_window():
             until_next_cycle(0, PROBER_START_MIN)
             if SHUTDOWN_FLAG: break
 
@@ -542,7 +541,7 @@ def active_prober():
 
             for onion_id in ONIONS_TO_QUERY:
 
-                if SHUTDOWN_FLAG or is_inside_blackout():
+                if SHUTDOWN_FLAG or is_inside_window():
                     break
 
                 raw_onion = onion_id.replace(".onion", "")
@@ -566,7 +565,7 @@ def active_prober():
                 except Exception as e:
                     # Captures cases where the command cannot execute locally
                     save_json_log("prober_errors.json", {
-                        "timestamp": datetime.datetime.now().isoformat(),
+                        "timestamp": datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes"),
                         "onion": onion_id,
                         "error": str(e)
                     })
@@ -595,6 +594,8 @@ def consensus_monitor():
         print(f"[CRITICAL] Consensus channel connection dropped: {e}")
         return
 
+    until_next_cycle(23, 57)
+
     last_hour = datetime.datetime.now(datetime.UTC).hour
     state_updates = {}
 
@@ -609,18 +610,18 @@ def consensus_monitor():
             time_until_sync = (next_sync - now).total_seconds()
             
             if 0 < time_until_sync:
-                for _ in range(int(time_until_sync)):
+                for _ in range(math.ceil(time_until_sync)):
                     if SHUTDOWN_FLAG: break
                     time.sleep(1)
                 
             if SHUTDOWN_FLAG: break
 
             now = datetime.datetime.now(datetime.UTC)
-            timestamp = datetime.datetime.now().isoformat()
+            timestamp = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
             # Refresh + rotated status HSDirs
             if now.hour == 0:
-                print("[AUDITOR] 00:05 UTC - Processing stable historical ring states...")
+                print("[AUDITOR] 00:05 UTC - Processing historical HSDirs states...")
                 if tracked_target_hsdirs:
                     with hsdir_state_lock:
                         rotated_hsdirs = dict(tracked_target_hsdirs)
@@ -882,7 +883,7 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    started = datetime.datetime.now().isoformat()
+    started = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
     threads = [
         threading.Thread(target=run_event_listener, daemon=True),
@@ -903,7 +904,7 @@ def main():
     for t in threads:
         t.join()
 
-    ended = datetime.datetime.now().isoformat()
+    ended = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
     uptime = {
         "started": started,
