@@ -530,7 +530,7 @@ def active_prober():
 
         if is_inside_blackout():
             print("[PROBER] Within ring migration blackout window. Hibernating probing operations...")
-            wait_until_next_utc(0, PROBER_START_MIN)
+            until_next_cycle(0, PROBER_START_MIN)
             if SHUTDOWN_FLAG: break
 
         try:
@@ -633,7 +633,7 @@ def consensus_monitor():
                         hsdir_contact_cache.clear()
 
                 # Time window to populate with fingerprints after rotation
-                wait_until_next_utc(0, CONSENSUS_START_MIN)
+                until_next_cycle(0, CONSENSUS_START_MIN)
                 last_hour = 0
                 continue
 
