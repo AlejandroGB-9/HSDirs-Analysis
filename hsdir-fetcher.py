@@ -151,12 +151,12 @@ def calculate_ring_distance(hsdir_index_hex, onion_target_index_hex):
     except Exception:
         return None
 
-def get_relay_contact_info(conn, fingerprint, node):
+def get_relay_contact_info(fingerprint, node):
     # Remote lookahead for contact information of a fingerprint
     global hsdir_contact_cache
 
     with contact_cache_lock:
-        cache_entry = hsdir_contact_cache[fingerprint]
+        cache_entry = hsdir_contact_cache.get(fingerprint)
 
     needs_remote_fetch = False
     contact_string = "None Specified"
@@ -486,6 +486,12 @@ def hs_desc_event_listener(event):
                 tracked_target_hsdirs[hsdir_fp]["ring_distance"] = ring_distance if ring_distance else tracked_target_hsdirs[hsdir_fp]["ring_distance"]
                 tracked_target_hsdirs[hsdir_fp]["ring_position"] = ring_position if ring_position else tracked_target_hsdirs[hsdir_fp]["ring_position"]
 
+            desc_id = tracked_target_hsdirs[hsdir_fp]["descriptor_id_b64"]
+            target_idx = tracked_target_hsdirs[hsdir_fp]["onion_target_index_hex"]
+            hrt = tracked_target_hsdirs[hsdir_fp]["hsdir_index_hrt"]
+            dist = tracked_target_hsdirs[hsdir_fp]["ring_distance"]
+            pos = tracked_target_hsdirs[hsdir_fp]["ring_position"]
+
         if event.action not in {"FAILED", "RECEIVED", "UPLOADED"}:
             return
 
@@ -496,11 +502,11 @@ def hs_desc_event_listener(event):
             "action": event.action,
             "hsdir_fingerprint": hsdir_fp,
             "replica": replica,
-            "descriptor_id_b64": descriptor_id if descriptor_id else tracked_target_hsdirs[hsdir_fp]["descriptor_id_b64"],
-            "onion_target_index_hex": onion_target_index_hex if onion_target_index_hex else tracked_target_hsdirs[hsdir_fp]["onion_target_index_hex"],
-            "hsdir_index_hrt": hsdir_index_hrt if hsdir_index_hrt else tracked_target_hsdirs[hsdir_fp]["hsdir_index_hrt"], # Position on the Hash Ring Table
-            "ring_distance": ring_distance if ring_distance else tracked_target_hsdirs[hsdir_fp]["ring_distance"],
-            "ring_position": ring_position if ring_position else tracked_target_hsdirs[hsdir_fp]["ring_position"],
+            "descriptor_id_b64": desc_id,
+            "onion_target_index_hex": target_idx,
+            "hsdir_index_hrt": hrt, # Position on the Hash Ring Table
+            "ring_distance": dist,
+            "ring_position": pos,
             "reason": reason
         }
 
@@ -537,7 +543,7 @@ def active_prober():
             with ephemeral_lock:
                 current_ephemerals = [f"{uid}.onion" for uid in active_ephemerals]
             
-            ONIONS_TO_QUERY = OWNED_STATIC_ONIONS + THIRD_PARTY_ONIONS + [f"{uid}.onion" for uid in active_ephemerals]
+            ONIONS_TO_QUERY = OWNED_STATIC_ONIONS + THIRD_PARTY_ONIONS + current_ephemerals
 
             for onion_id in ONIONS_TO_QUERY:
 
@@ -694,7 +700,7 @@ def consensus_monitor():
                         if not declared_family_id:
                             declared_family_id = None
 
-                        contact_string = get_relay_contact_info(conn, fingerprint, node) 
+                        contact_string = get_relay_contact_info(fingerprint, node) 
 
                         if "HSDir" in node.flags:
 
@@ -710,11 +716,6 @@ def consensus_monitor():
                             if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
                                 fp_status = "DEAD_OFFLINE_CHURN"
                                 consider_dropped = timestamp
-                                with hsdir_state_lock:
-                                    tracked_target_hsdirs.pop(fingerprint, None)
-                                    state_updates.pop(fingerprint, None)
-                                with contact_cache_lock:
-                                    hsdir_contact_cache.pop(fingerprint, None)
                             else:
                                 fp_status = "STRIPPED_HSDIR_FLAG"
                                 consider_dropped = None
@@ -750,11 +751,6 @@ def consensus_monitor():
                         if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
                             fp_status = "DEAD_OFFLINE_CHURN"
                             consider_dropped = timestamp
-                            with hsdir_state_lock:
-                                tracked_target_hsdirs.pop(fingerprint, None)
-                                state_updates.pop(fingerprint, None)
-                            with contact_cache_lock:
-                                hsdir_contact_cache.pop(fingerprint, None)
                         else:
                             fp_status = "OFFLINE_CHURN"
                             consider_dropped = None
@@ -781,6 +777,13 @@ def consensus_monitor():
                             "timestamp_dropped": consider_dropped,
                             "status": fp_status
                         })
+
+                    if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
+                        with hsdir_state_lock:
+                            tracked_target_hsdirs.pop(fingerprint, None)
+                            state_updates.pop(fingerprint, None)
+                        with contact_cache_lock:
+                            hsdir_contact_cache.pop(fingerprint, None)
 
                     time.sleep(random.uniform(0.2,1.2))
 
