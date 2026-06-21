@@ -30,8 +30,9 @@ import traceback
 import random
 import re
 import base64
-import ast
 import math
+import hashlib
+import struct
 
 # Stem library required dependencies
 from stem.control import Controller, EventType
@@ -43,17 +44,17 @@ PROBE_INTERVAL = 1200            # 20-min interval between active probes
 
 # Synchronization windows
 WINDOW_START = datetime.time(23, 55, 0)     # 23:55 UTC
-WINDOW_END = datetime.time(0, 7, 0)         # 00:08 UTC
+WINDOW_END = datetime.time(0, 7, 0)         # 00:07 UTC
 EPHEMERAL_START_MIN = 1                     # 00:01 UTC
-PROBER_START_MIN = 7                        # 00:08 UTC
+PROBER_START_MIN = 8                        # 00:08 UTC
 CONSENSUS_START_MIN = 10                    # 00:10 UTC
 RING_SIZE = 2**256
 
 # Collection of onion services to query
 with open('target_onions/owned_onions.json', 'r', encoding='utf-8') as f: OWNED_STATIC_ONIONS = json.load(f)
 with open('target_onions/third_party_onions.json', 'r', encoding='utf-8') as f: THIRD_PARTY_ONIONS = json.load(f)
-# Collection of file to create thread-safety locks (bottleneck issues)
-ACCEPTED_LOG_FILES = ["hsdir_ring_events.json", "prober_errors.json", "network_hsdirs_consensus_snapshots.json", "tracked_hsdir_consensus_snapshots.json", "rotated_tracked_hsdir_consensus_snapshots.json", "rotated_network_hsdir_consensus_snapshots.json"]
+# Collection of files to create thread-safety locks (bottleneck issues)
+ACCEPTED_LOG_FILES = ["hsdir_ring_events.jsonl", "prober_errors.jsonl", "network_hsdirs_consensus_snapshots.jsonl", "tracked_hsdir_consensus_snapshots.jsonl", "rotated_tracked_hsdir_consensus_snapshots.jsonl", "rotated_network_hsdir_consensus_snapshots.jsonl"]
 
 # Global condition and default log directory
 SHUTDOWN_FLAG = False
@@ -82,7 +83,7 @@ def save_json_log(filename, data):
         with target_file_lock:
             filepath = os.path.join(DATA_DIR, filename)
             with open(filepath, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(data) + ",\n")
+                f.write(json.dumps(data) + "\n")
     except Exception as e:
         print(f"[LOG EXCEPTION] Failed writing entry to {filename}: {e}")
         traceback.print_exc()
@@ -94,16 +95,10 @@ def get_authenticated_controller():
     return controller
 
 def shuffle_container(data):
-    """
-    Shuffles a list or a dictionary.
-    Returns a new shuffled version without modifying the original input.
-    """
     if isinstance(data, list):
-        # random.sample creates a new shuffled list of the same length
         return random.sample(data, len(data))
     
     elif isinstance(data, dict):
-        # Convert dict items to a list of tuples, shuffle them, and rebuild the dict
         dict_items = list(data.items())
         random.shuffle(dict_items)
         return dict(dict_items)
@@ -220,8 +215,8 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                 node = conn.get_network_status(fingerprint)
                 # Fetch server full and micro descriptors to query Sybil identity markers (effective family info)
                 server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                declared_family = getattr(server_desc, 'family', None) if server_desc else None
-                family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+                declared_family = getattr(server_desc, 'family', None) if server_desc else []
+                family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
                 declared_family_id = getattr(server_desc, 'family_ids', None)
 
                 if not declared_family_id and server_desc:
@@ -303,8 +298,8 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                     "first_discovery": meta["first_discovery"],
                     "last_timestamp": meta["last_timestamp"],
                     "descriptor_id_b64": meta["descriptor_id_b64"] if meta["descriptor_id_b64"] else None,
-                    "hsdir_index_hrt_hex": hsdir_index_hrt,
-                    "hsdir_index_hrt_100": round((int(hsdir_index_hrt, 16)/RING_SIZE)*100,2) if hsdir_index_hrt else None,
+                    "hsdir_index_hrt_hex": format(hsdir_index_hrt,'X') if hsdir_index_hrt else None,
+                    "hsdir_index_hrt_100": round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None,
                     "hsdir_to_onion_ring_distance": meta["hsdir_to_onion_ring_distance"] if meta["hsdir_to_onion_ring_distance"] else None,
                     "hsdir_to_onion_ring_position": meta["hsdir_to_onion_ring_position"] if meta["hsdir_to_onion_ring_position"] else None,
                     "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
@@ -349,7 +344,7 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                     "status": fp_status
                 })
 
-            time.sleep(random.uniform(0.2,1.2))
+            time.sleep(random.uniform(0.2,0,5))
 
         save_json_log(target_file, {
             "timestamp": timestamp,
@@ -491,16 +486,16 @@ def hs_desc_event_listener(event):
             "action": event.action,
             "hsdir_fingerprint": hsdir_fp,
             "descriptor_id_b64": desc_id,
-            "onion_target_index_hex": target_idx,
+            "onion_target_index_hex": target_idx_hex,
             "onion_target_index_100": target_idx_100,
-            "hsdir_index_hrt_hex": hrt, # Position on the Hash Ring Table
+            "hsdir_index_hrt_hex": hrt_hex, # Position on the Hash Ring Table
             "hsdir_index_hrt_100": hrt_100,
             "hsdir_to_onion_ring_distance": dist,
             "hsdir_to_onion_ring_position": pos,
             "reason": reason
         }
 
-        save_json_log("hsdir_ring_events.json", log_entry)
+        save_json_log("hsdir_ring_events.jsonl", log_entry)
 
     except Exception as e:
         print(f"[EXC-EVENT-LISTENER] Error parsing incoming stream frame: {e}")
@@ -570,13 +565,13 @@ def active_prober():
 
                 except Exception as e:
                     # Captures cases where the command cannot execute locally
-                    save_json_log("prober_errors.json", {
+                    save_json_log("prober_errors.jsonl", {
                         "timestamp": datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes"),
                         "onion": onion_id,
                         "error": str(e)
                     })
 
-                time.sleep(random.uniform(5.0, 15.0)) # Spacer between unique domain fetches
+                time.sleep(random.uniform(5.0, 13.0)) # Spacer between unique domain fetches
 
         except Exception as e:
             print(f"[PROBER ERROR] Main discovery loop exception: {e}")
@@ -637,7 +632,7 @@ def network_consensus():
                         state_updates.clear()
 
                     hour_changed = (last_hour != now.hour)
-                    rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_network_hsdir_consensus_snapshots.json")
+                    rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_network_hsdir_consensus_snapshots.jsonl")
                         
                 minute_check = datetime.datetime.now(datetime.UTC).minute
                 if minute_check >= CONSENSUS_START_MIN:
@@ -690,8 +685,8 @@ def network_consensus():
                         if fingerprint not in state_updates:
                             state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                        declared_family = getattr(server_desc, 'family', None) if server_desc else None
-                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+                        declared_family = getattr(server_desc, 'family', None) if server_desc else []
+                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
                         declared_family_id = getattr(server_desc, 'family_ids', None)
 
                         if not declared_family_id and server_desc:
@@ -749,8 +744,8 @@ def network_consensus():
                                     network_wide_hsdirs[fingerprint] = {
                                         "first_discovery": timestamp,
                                         "last_timestamp": timestamp,
-                                        "hsdir_index_hrt_hex": hsdir_index_hrt, # Position on the Hash Ring Table
-                                        "hsdir_index_hrt_100": round((int(hsdir_index_hrt, 16)/RING_SIZE)*100,2) if hsdir_index_hrt else None
+                                        "hsdir_index_hrt_hex": format(hsdir_index_hrt,'X') if hsdir_index_hrt else None,
+                                        "hsdir_index_hrt_100": round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None
                                     }
                                     f_discovery = network_wide_hsdirs[fingerprint]["first_discovery"]
                                     l_timestamp = network_wide_hsdirs[fingerprint]["last_timestamp"]
@@ -758,8 +753,8 @@ def network_consensus():
                                     hsdir_hrt_100 = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"]
                                 else:
                                     network_wide_hsdirs[fingerprint]["last_timestamp"] = timestamp
-                                    network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = hsdir_index_hrt
-                                    network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((int(hsdir_index_hrt, 16)/RING_SIZE)*100,2) if hsdir_index_hrt else None
+                                    network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = format(hsdir_index_hrt,'X') if hsdir_index_hrt else None
+                                    network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None
                                     f_discovery = network_wide_hsdirs[fingerprint]["first_discovery"]
                                     l_timestamp = network_wide_hsdirs[fingerprint]["last_timestamp"]
                                     hsdir_hrt_hex = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"]
@@ -784,6 +779,8 @@ def network_consensus():
                                 "status": fp_status
                             })
 
+                    time.sleep(random.uniform(0.2,0.7))
+
                 with network_wide_lock:
                     wide_fingerprints = dict(network_wide_hsdirs)
                     
@@ -799,8 +796,8 @@ def network_consensus():
                             node = conn.get_network_status(fingerprint)
                             # Fetch server full and micro descriptors to query Sybil identity markers (effective family info)
                             server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                            declared_family = getattr(server_desc, 'family', None) if server_desc else None
-                            family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+                            declared_family = getattr(server_desc, 'family', None) if server_desc else []
+                            family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
                             declared_family_id = getattr(server_desc, 'family_ids', None)
 
                             if not declared_family_id and server_desc:
@@ -849,8 +846,8 @@ def network_consensus():
                                         hsdir_index_hrt = None
 
                             with network_wide_lock:
-                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = hsdir_index_hrt
-                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((int(hsdir_index_hrt, 16)/RING_SIZE)*100,2) if hsdir_index_hrt else None
+                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = format(hsdir_index_hrt,'X') if hsdir_index_hrt else None
+                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None
                                 hsdir_hrt_hex = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"]
                                 hsdir_hrt_100 = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"]
 
@@ -926,19 +923,19 @@ def network_consensus():
                         with network_wide_lock:
                             network_wide_hsdirs[fingerprint]["last_timestamp"] = timestamp
 
-                        time.sleep(random.uniform(1.2,2.2))
+                        time.sleep(random.uniform(0.2,0.7))
 
             except Exception as e:
                 print(f"[AUDITOR ERROR] Main monitoring thread loop exception: {e}")
                 traceback.print_exc()
 
-            save_json_log("network_hsdirs_consensus_snapshots.json", {
+            save_json_log("network_hsdirs_consensus_snapshots.jsonl", {
                 "timestamp": timestamp,
                 "total_active_hsdirs": len(audited_nodes),
                 "relays": audited_nodes
             })
 
-            print(f"[AUDITOR-WIDE] Audit completed. Logs committed to network_hsdirs_consensus_snapshots.json.")
+            print(f"[AUDITOR-WIDE] Audit completed. Logs committed to network_hsdirs_consensus_snapshots.jsonl.")
 
             if hour_changed:
                 last_hour = now.hour  
@@ -997,7 +994,7 @@ def consensus_monitor():
                         state_updates.clear()
 
                     hour_changed = (last_hour != now.hour)
-                    rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_tracked_hsdir_consensus_snapshots.json")
+                    rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_tracked_hsdir_consensus_snapshots.jsonl")
                         
                 minute_check = datetime.datetime.now(datetime.UTC).minute
                 if minute_check >= CONSENSUS_START_MIN:
@@ -1014,9 +1011,8 @@ def consensus_monitor():
             with hsdir_state_lock:
                 target_fingerprints = dict(tracked_target_hsdirs)
 
-            target_fingerprints = shuffle_container(target_fingerprints)
-
             if target_fingerprints:
+                target_fingerprints = shuffle_container(target_fingerprints)
                 print(f"[AUDITOR] Executing localized stability audit on {len(target_fingerprints)} target HSDirs...")
                 audited_nodes = []
 
@@ -1033,8 +1029,8 @@ def consensus_monitor():
                         node = conn.get_network_status(fingerprint)
                         # Fetch server full and micro descriptors to query Sybil identity markers (effective family info)
                         server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                        declared_family = getattr(server_desc, 'family', None) if server_desc else None
-                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else None)]
+                        declared_family = getattr(server_desc, 'family', None) if server_desc else []
+                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
                         declared_family_id = getattr(server_desc, 'family_ids', None)
 
                         if not declared_family_id and server_desc:
@@ -1144,19 +1140,19 @@ def consensus_monitor():
 
                     time.sleep(random.uniform(1.2,2.2))
 
-                save_json_log("tracked_hsdir_consensus_snapshots.json", {
+                save_json_log("tracked_hsdir_consensus_snapshots.jsonl", {
                     "timestamp": timestamp,
                     "total_active_hsdirs": len(audited_nodes),
                     "relays": audited_nodes
                 })
 
-                print(f"[AUDITOR] Audit completed. Logs committed to tracked_hsdir_consensus_snapshots.json.")
+                print(f"[AUDITOR] Audit completed. Logs committed to tracked_hsdir_consensus_snapshots.jsonl.")
 
                 if hour_changed:
                     last_hour = now.hour            
 
             else:
-                save_json_log("tracked_hsdir_consensus_snapshots.json", {
+                save_json_log("tracked_hsdir_consensus_snapshots.jsonl", {
                     "timestamp": timestamp,
                     "active_targets_count": 0,
                     "status": "AWAITING_FIRST_DESCRIPTOR_EVENT"
@@ -1282,7 +1278,7 @@ def main():
         "ended": ended
     }
 
-    filepath = os.path.join(DATA_DIR, "program_execution_period.json")
+    filepath = os.path.join(DATA_DIR, "program_execution_period.jsonl")
     with open(filepath, 'a', encoding='utf-8') as f:
         f.write(json.dumps(uptime) + ",\n")
         
