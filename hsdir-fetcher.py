@@ -882,7 +882,7 @@ def network_consensus():
                             "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
                             "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
                             "first_discovery": meta["first_discovery"],
-                            "last_timestamp": timestamp if "HSDir" in node.flags else meta["last_timestamp"],
+                            "last_timestamp": timestamp if node and "HSDir" in node.flags else meta["last_timestamp"],
                             "hsdir_index_hrt_hex": hsdir_hrt_hex,
                             "hsdir_index_hrt_100": hsdir_hrt_100,
                             "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
