@@ -781,113 +781,88 @@ def network_consensus():
 
                     time.sleep(random.uniform(0.2,0.7))
 
-                with network_wide_lock:
-                    wide_fingerprints = dict(network_wide_hsdirs)
-                    
-                wide_fingerprints = shuffle_container(wide_fingerprints)
+            except Exception as e:
+                print(f"[AUDITOR ERROR] Main monitoring thread loop exception: {e}")
+                traceback.print_exc()
+            with network_wide_lock:
+                wide_fingerprints = dict(network_wide_hsdirs)
+                
+            wide_fingerprints = shuffle_container(wide_fingerprints)
 
-                for fingerprint, meta in wide_fingerprints.items():
-                    if SHUTDOWN_FLAG: break
-                    if fingerprint not in audited_list:
-                        node = None
-                        declared_family_id = None
-                        family_list = None
-                        try:
-                            node = conn.get_network_status(fingerprint)
-                            # Fetch server full and micro descriptors to query Sybil identity markers (effective family info)
-                            server_desc = conn.get_microdescriptor(fingerprint, default=None)
-                            declared_family = getattr(server_desc, 'family', None) if server_desc else []
-                            family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
-                            declared_family_id = getattr(server_desc, 'family_ids', None)
+            for fingerprint, meta in wide_fingerprints.items():
+                if SHUTDOWN_FLAG: break
+                if fingerprint not in audited_list:
+                    node = None
+                    declared_family_id = None
+                    family_list = None
+                    try:
+                        node = conn.get_network_status(fingerprint)
+                        # Fetch server full and micro descriptors to query Sybil identity markers (effective family info)
+                        server_desc = conn.get_microdescriptor(fingerprint, default=None)
+                        declared_family = getattr(server_desc, 'family', None) if server_desc else []
+                        family_list = [entry.lstrip('$') for entry in (list(declared_family) if isinstance(declared_family, (set, list)) else [])]
+                        declared_family_id = getattr(server_desc, 'family_ids', None)
 
-                            if not declared_family_id and server_desc:
-                                for line in server_desc.get_unrecognized_lines():
+                        if not declared_family_id and server_desc:
+                            for line in server_desc.get_unrecognized_lines():
+                                if line.startswith("family-ids "):
+                                    # Split off the token prefix and capture all space-separated IDs
+                                    declared_family_id = line.strip().split()[1:]
+                                    break
+
+                        if not declared_family_id and server_desc:
+                            try:
+                                for line in server_desc.get_text().splitlines():
                                     if line.startswith("family-ids "):
-                                        # Split off the token prefix and capture all space-separated IDs
                                         declared_family_id = line.strip().split()[1:]
                                         break
+                            except Exception:
+                                pass
 
-                            if not declared_family_id and server_desc:
-                                try:
-                                    for line in server_desc.get_text().splitlines():
-                                        if line.startswith("family-ids "):
-                                            declared_family_id = line.strip().split()[1:]
-                                            break
-                                except Exception:
-                                    pass
+                        if declared_family_id:
+                            declared_family_id = declared_family_id[0].replace("ed25519:", "")
 
-                            if declared_family_id:
-                                declared_family_id = declared_family_id[0].replace("ed25519:", "")
+                        if not declared_family_id:
+                            declared_family_id = None
 
-                            if not declared_family_id:
-                                declared_family_id = None
-
-                            if server_desc:
-                                # Ed25519 master key                       
-                                ed25519_b64 = None
-                                if hasattr(server_desc, 'ed25519_identity') and server_desc.ed25519_identity:
-                                    ed25519_b64 = server_desc.ed25519_identity
-                                else:
-                                    for line in str(server_desc).splitlines():
-                                        if line.startswith("id ed25519 "):
-                                            ed25519_b64 = line.split()[2]
-                                            break
-                                
-                                # HRT position calculation
-                                if ed25519_b64 and current_srv_bytes and current_time_period:
-                                    try:
-                                        padded_id = ed25519_b64 + "=" * ((4 - len(ed25519_b64) % 4) % 4)
-                                        ed25519_bytes = base64.b64decode(padded_id)
-                                        tp_packed = struct.pack(">Q", current_time_period)
-                                        node_idx_msg = b"node-idx" + ed25519_bytes + tp_packed + current_srv_bytes
-                                        hsdir_index_bytes = hashlib.sha3_256(node_idx_msg).digest()
-                                        hsdir_index_hrt = int.from_bytes(hsdir_index_bytes, byteorder='big')
-                                    except Exception:
-                                        hsdir_index_hrt = None
-
-                            with network_wide_lock:
-                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = format(hsdir_index_hrt,'X') if hsdir_index_hrt else None
-                                network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None
-                                hsdir_hrt_hex = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"]
-                                hsdir_hrt_100 = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"]
-
-                            if "HSDir" in node.flags:
-
-                                state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
-                                fp_status = "ACTIVE_IN_RING"
-                                consider_dropped = None
-
+                        if server_desc:
+                            # Ed25519 master key                       
+                            ed25519_b64 = None
+                            if hasattr(server_desc, 'ed25519_identity') and server_desc.ed25519_identity:
+                                ed25519_b64 = server_desc.ed25519_identity
                             else:
-                                # Node exists but was stripped of active capabilities
-                                if hour_changed:
-                                    state_updates[fingerprint]["consecutive_hourly_absences"] += 1
-                                    
-                                if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
-                                    fp_status = "DEAD_OFFLINE_CHURN"
-                                    consider_dropped = timestamp
-                                else:
-                                    fp_status = "STRIPPED_HSDIR_FLAG"
-                                    consider_dropped = None
+                                for line in str(server_desc).splitlines():
+                                    if line.startswith("id ed25519 "):
+                                        ed25519_b64 = line.split()[2]
+                                        break
+                            
+                            # HRT position calculation
+                            if ed25519_b64 and current_srv_bytes and current_time_period:
+                                try:
+                                    padded_id = ed25519_b64 + "=" * ((4 - len(ed25519_b64) % 4) % 4)
+                                    ed25519_bytes = base64.b64decode(padded_id)
+                                    tp_packed = struct.pack(">Q", current_time_period)
+                                    node_idx_msg = b"node-idx" + ed25519_bytes + tp_packed + current_srv_bytes
+                                    hsdir_index_bytes = hashlib.sha3_256(node_idx_msg).digest()
+                                    hsdir_index_hrt = int.from_bytes(hsdir_index_bytes, byteorder='big')
+                                except Exception:
+                                    hsdir_index_hrt = None
 
-                            audited_nodes.append({
-                                "fingerprint": fingerprint,
-                                "nickname": node.nickname if node else None,
-                                "ip_address": node.address if node else None,
-                                "or_port": node.or_port if node else None,
-                                "flags": node.flags if node else None,
-                                "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
-                                "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": timestamp,
-                                "hsdir_index_hrt_hex": hsdir_hrt_hex,
-                                "hsdir_index_hrt_100": hsdir_hrt_100,
-                                "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
-                                "timestamp_dropped": consider_dropped,
-                                "status": fp_status
-                            })
-                        
-                        except Exception:
-                            # Node has fallen out of the active consensus entirely (churn event)
+                        with network_wide_lock:
+                            network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"] = format(hsdir_index_hrt,'X') if hsdir_index_hrt else None
+                            network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"] = round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None
+                            hsdir_hrt_hex = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_hex"]
+                            hsdir_hrt_100 = network_wide_hsdirs[fingerprint]["hsdir_index_hrt_100"]
+
+                        if "HSDir" in node.flags:
+                            with network_wide_lock:
+                                network_wide_hsdirs[fingerprint]["last_timestamp"] = timestamp
+                            state_updates[fingerprint] = {"consecutive_hourly_absences": 0}
+                            fp_status = "ACTIVE_IN_RING"
+                            consider_dropped = None
+
+                        else:
+                            # Node exists but was stripped of active capabilities
                             if hour_changed:
                                 state_updates[fingerprint]["consecutive_hourly_absences"] += 1
                                 
@@ -895,39 +870,61 @@ def network_consensus():
                                 fp_status = "DEAD_OFFLINE_CHURN"
                                 consider_dropped = timestamp
                             else:
-                                fp_status = "OFFLINE_CHURN"
+                                fp_status = "STRIPPED_HSDIR_FLAG"
                                 consider_dropped = None
 
-                            audited_nodes.append({
-                                "fingerprint": fingerprint,
-                                "nickname": node.nickname if node else None,
-                                "ip_address": node.address if node else None,
-                                "or_port": node.or_port if node else None,
-                                "flags": node.flags if node else None,
-                                "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
-                                "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
-                                "first_discovery": meta["first_discovery"],
-                                "last_timestamp": meta["last_timestamp"],
-                                "hsdir_index_hrt_hex": meta["hsdir_index_hrt_hex"],
-                                "hsdir_index_hrt_100": meta["hsdir_index_hrt_100"],
-                                "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
-                                "timestamp_dropped": consider_dropped,
-                                "status": fp_status
-                            })
-
+                        audited_nodes.append({
+                            "fingerprint": fingerprint,
+                            "nickname": node.nickname if node else None,
+                            "ip_address": node.address if node else None,
+                            "or_port": node.or_port if node else None,
+                            "flags": node.flags if node else None,
+                            "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                            "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
+                            "first_discovery": meta["first_discovery"],
+                            "last_timestamp": timestamp if "HSDir" in node.flags else meta["last_timestamp"],
+                            "hsdir_index_hrt_hex": hsdir_hrt_hex,
+                            "hsdir_index_hrt_100": hsdir_hrt_100,
+                            "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
+                            "timestamp_dropped": consider_dropped,
+                            "status": fp_status
+                        })
+                    
+                    except Exception:
+                        # Node has fallen out of the active consensus entirely (churn event)
+                        if hour_changed:
+                            state_updates[fingerprint]["consecutive_hourly_absences"] += 1
+                            
                         if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
-                            with network_wide_lock:
-                                network_wide_hsdirs.pop(fingerprint, None)
-                                state_updates.pop(fingerprint, None)
+                            fp_status = "DEAD_OFFLINE_CHURN"
+                            consider_dropped = timestamp
+                        else:
+                            fp_status = "OFFLINE_CHURN"
+                            consider_dropped = None
 
+                        audited_nodes.append({
+                            "fingerprint": fingerprint,
+                            "nickname": node.nickname if node else None,
+                            "ip_address": node.address if node else None,
+                            "or_port": node.or_port if node else None,
+                            "flags": node.flags if node else None,
+                            "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
+                            "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
+                            "first_discovery": meta["first_discovery"],
+                            "last_timestamp": meta["last_timestamp"],
+                            "hsdir_index_hrt_hex": meta["hsdir_index_hrt_hex"],
+                            "hsdir_index_hrt_100": meta["hsdir_index_hrt_100"],
+                            "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
+                            "timestamp_dropped": consider_dropped,
+                            "status": fp_status
+                        })
+
+                    if state_updates[fingerprint]["consecutive_hourly_absences"] >= 2:
                         with network_wide_lock:
-                            network_wide_hsdirs[fingerprint]["last_timestamp"] = timestamp
+                            network_wide_hsdirs.pop(fingerprint, None)
+                            state_updates.pop(fingerprint, None)
 
-                        time.sleep(random.uniform(0.2,0.7))
-
-            except Exception as e:
-                print(f"[AUDITOR ERROR] Main monitoring thread loop exception: {e}")
-                traceback.print_exc()
+                    time.sleep(random.uniform(0.2,0.7))
 
             save_json_log("network_hsdirs_consensus_snapshots.jsonl", {
                 "timestamp": timestamp,
