@@ -291,17 +291,17 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                     "flags": node.flags if node else None,
                     "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
                     "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
-                    "last_known_onion": meta["associated_onion"] if meta["associated_onion"] else None,
-                    "last_known_onion_index_hex": meta["onion_target_index_hex"] if meta["onion_target_index_hex"] else None,
-                    "last_known_onion_index_100": meta["onion_target_index_100"] if meta["onion_target_index_100"] else None,
-                    "service_type": meta["service_type"] if meta["service_type"] else None,
+                    "last_known_onion": meta["associated_onion"] if meta.get("associated_onion") else None,
+                    "last_known_onion_index_hex": meta["onion_target_index_hex"] if meta.get("onion_target_index_hex") else None,
+                    "last_known_onion_index_100": meta["onion_target_index_100"] if meta.get("onion_target_index_100") else None,
+                    "service_type": meta["service_type"] if meta.get("service_type") else None,
                     "first_discovery": meta["first_discovery"],
                     "last_timestamp": meta["last_timestamp"],
-                    "descriptor_id_b64": meta["descriptor_id_b64"] if meta["descriptor_id_b64"] else None,
+                    "descriptor_id_b64": meta["descriptor_id_b64"] if meta.get("descriptor_id_b64") else None,
                     "hsdir_index_hrt_hex": format(hsdir_index_hrt,'X') if hsdir_index_hrt else None,
                     "hsdir_index_hrt_100": round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None,
-                    "hsdir_to_onion_ring_distance": meta["hsdir_to_onion_ring_distance"] if meta["hsdir_to_onion_ring_distance"] else None,
-                    "hsdir_to_onion_ring_position": meta["hsdir_to_onion_ring_position"] if meta["hsdir_to_onion_ring_position"] else None,
+                    "hsdir_to_onion_ring_distance": meta["hsdir_to_onion_ring_distance"] if meta.get("hsdir_to_onion_ring_distance") else None,
+                    "hsdir_to_onion_ring_position": meta["hsdir_to_onion_ring_position"] if meta.get("hsdir_to_onion_ring_position") else None,
                     "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                     "timestamp_dropped": consider_dropped,
                     "status": fp_status
@@ -328,23 +328,23 @@ def rotated_hsdir_monitor(rotated_hsdirs, state_updates, hour_changed, timestamp
                     "flags": node.flags if node else None,
                     "declared_family_id": declared_family_id if declared_family_id else None,   # Structural Sybil Flag Vector
                     "declared_family": family_list if family_list else None,                    # Structural Sybil Flag Vector
-                    "last_known_onion": meta["associated_onion"] if meta["associated_onion"] else None,
-                    "last_known_onion_index_hex": meta["onion_target_index_hex"] if meta["onion_target_index_hex"] else None,
-                    "last_known_onion_index_100": meta["onion_target_index_100"] if meta["onion_target_index_100"] else None,
-                    "service_type": meta["service_type"] if meta["service_type"] else None,
+                    "last_known_onion": meta["associated_onion"] if meta.get("associated_onion") else None,
+                    "last_known_onion_index_hex": meta["onion_target_index_hex"] if meta.get("onion_target_index_hex") else None,
+                    "last_known_onion_index_100": meta["onion_target_index_100"] if meta.get("onion_target_index_100") else None,
+                    "service_type": meta["service_type"] if meta.get("service_type") else None,
                     "first_discovery": meta["first_discovery"],
                     "last_timestamp": meta["last_timestamp"],
-                    "descriptor_id_b64": meta["descriptor_id_b64"] if meta["descriptor_id_b64"] else None,
-                    "hsdir_index_hrt_hex": meta["hsdir_index_hrt_hex"],
-                    "hsdir_index_hrt_100": meta["hsdir_index_hrt_100"],
-                    "hsdir_to_onion_ring_distance": meta["hsdir_to_onion_ring_distance"] if meta["hsdir_to_onion_ring_distance"] else None,
-                    "hsdir_to_onion_ring_position": meta["hsdir_to_onion_ring_position"] if meta["hsdir_to_onion_ring_position"] else None,
+                    "descriptor_id_b64": meta["descriptor_id_b64"] if meta.get("descriptor_id_b64") else None,
+                    "hsdir_index_hrt_hex": format(hsdir_index_hrt,'X') if hsdir_index_hrt else None,
+                    "hsdir_index_hrt_100": round((hsdir_index_hrt/RING_SIZE)*100,2) if hsdir_index_hrt else None,
+                    "hsdir_to_onion_ring_distance": meta["hsdir_to_onion_ring_distance"] if meta.get("hsdir_to_onion_ring_distance") else None,
+                    "hsdir_to_onion_ring_position": meta["hsdir_to_onion_ring_position"] if meta.get("hsdir_to_onion_ring_position") else None,
                     "consecutive_hourly_absences": state_updates[fingerprint]["consecutive_hourly_absences"],
                     "timestamp_dropped": consider_dropped,
                     "status": fp_status
                 })
 
-            time.sleep(random.uniform(0.2,0,5))
+            time.sleep(random.uniform(0.2,0.5))
 
         save_json_log(target_file, {
             "timestamp": timestamp,
