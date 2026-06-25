@@ -215,73 +215,101 @@ hmargin=1.5cm
 TODO
 \end{abstract}
 
-\begin{IEEEkeywords}
+\begin{IEEEkeywords} %TODO: Modify these keywords
 Tor, Hidden Services, HSDirs, Cybersecurity, Privacy, Analysis, Churn, Sybil patterns
 \end{IEEEkeywords}
 
-\section{Introduction}
-The Tor Project, commonly known as Tor, it is, if not the most, the preferred network overlay to provide 
+\section{Introduction} %Refactor the initial writing style introduced in the introduction
+The Tor Project, commonly known as Tor, it is, if not the most, preferred network overlay to provide 
 an anonymous communication network. In 2003 the developers introduced an anonymity mechanism to protect
 the service providers, onion services, on the Tor network, that was later deployed in 2004 as the version 2 (V2)
-of the onion services. (TODO: USE REF 1 OF DOC)
+protocol of the onion services. %(TODO: USE REF 1 OF DOC)
 
 Each onion service generates an address when started, a domain name, used by Tor clients to access the service.
 To achieve a communication between a client and an onion service a two-way anonymous communication is established
 over a 6-hop circuit, beaing each hop a Tor node. Nonetheless, Tor deprecates the version 2 protocol
-in 2021 (TODO: USE REF 2 OF DOC), and migrates to the third version of onion services (V3) due to the 
-different issues caused by the V2 protocol. Among these issues are included, (TODO: INCLUDE PROBLEMS). The
-newly deployed V3 protocol assesses these issues including avoiding direct exposure of onion services to
-Hidden Service Directories, now onward referred as HSDirs, which may abuse of onion services.
+in 2021 (TODO: USE REF 2 OF DOC), and transitions to a third version of onion services (V3) due to the 
+different issues identified on the V2 protocol. Among these issues are included, the V2 protocol had unsecure cryptography
+under today's technology capabilities (SHA1, DH \& RSA1024), it suffered from information leakeage to directory servers allowing attackers 
+to harvest onion addresses by deploying their owned Hidden Service Directories, now onward referred as HSDirs, or performing enumeration attacks
+towards other HSDirs on the Tor network. The newly deployed V3 protocol assesses these issues by including measurements to avoid a
+direct exposure of onion addresses to HSDirs, introduced better cryptographic functions (SHA3, Ed25519 \& Curve25519), reduced the amount 
+of information exposed to directory servers (HSDirs) and attack surface, improved security against impersonation, included an extensile of introduction 
+and rendezvous points on the protocol, set offline keys (local) for onion services and other protection mechanisms. %(TODO: TOR DOC PAG 339)
 
-To understand the current situation of HSDirs security, a set of onion services, consisting of personal onion services static
-and ephemeral, and third party onion services, is put under a 30-days public data gathering of HSDirs on the network hosting the 
-onion services descriptors, and perform a comprehensive analysis to shed light on the current security regarding
+To comprehend the current situation of HSDirs security, a set of onion services, consisting of personal onion services static
+and ephemeral, and third party onion services, are put under a 30-days public data gathering of HSDirs hosting their 
+onion services descriptors and network-wide HSDirs available on the network, to perform a comprehensive analysis to shed light on the current stability and security regarding
 hosting HSDirs (Tor relays) on the Tor network. 
 
-TODO: Explanation of what it's been done
-\section{Tor Onion Hidden Services Mechanism}
+%TODO: Explanation of what it's been done and part of the results
+\section{Tor's Onion Service V3 Protocol and Mechanism}
 
 This section presents the Tor's onion service V3 protocol with an overview of the essential parties of the
-mechanism, including the onion services address generation, publication and connection establishment. (TODO: USE TOR OFFICIAL DOCS AS REF)
+mechanism, including the onion services address generation, publication and indexing, and connection establishment. %(TODO: USE TOR OFFICIAL DOCS AS REF)
 
-\subsection{Mechanism Overview}
+\subsection{Mechanism and Protocol Overview}%TODO: Add references from Tor's official sources and infographics
 
-The mechanism refers to permiting any user to access or publish internet services in an anonymous manner,
-such as Web (HTTP) or SSH services. It involves the use of 6-type Tor nodes to establish a connection:
-
-\begin{itemize}
-\item \textbf{Tor Client.} TODO: Explain
-\item \textbf{Onion Service.} TODO: Explain
-\item \textbf{Authority.} TODO: Explain
-\item \textbf{Introduction Point (IPO).} TODO: Explain
-\item \textbf{Hidden Service Directory (HSDir).} TODO: Explain
-\item \textbf{Rendezvous Point (RPO).} TODO: Explain
-\end{itemize}
-
-(INCLUDE IMAGE THAT EXPLAINS THE NETWORK)
+The architectural ecosystem of the Tor version 3 (V3) onion service protocol implements a decentralized framework designed to facilitate mutual anonymized application-layer
+communication for both the client and the service provider while masking the identities and locations of both endpoints. Different from centralized domain registries, the V3
+architecture operates entirely within the Tor relay network, managing connections through a specialized set of relays avoiding direct network visilibility of both endpoints.
+The public service address is splitted from their current IP routing path with a transient overlay and a multi-hop circuit. The framework relies essential in the interaction
+of six operational entities distributed across the network:
 
 \begin{enumerate}
-\item \textbf{STEP 1.} TODO: Explain
-\item \textbf{STEP 2.} TODO: Explain
-\item \textbf{STEP 3.} TODO: Explain
-\item \textbf{STEP 4.} TODO: Explain
-\item \textbf{STEP 5.} TODO: Explain
-\item \textbf{STEP 6.} TODO: Explain
+    \item \textbf{Tor Client:} The end-user application seeking to establish an authenticated, secure connection to the onion service without disclosing its own identity. Commonly a local proxy dawmon that encapsulates the traffic, handles keys exchanges and establishes multi-hop virtual paths to mask the origins requests.
+    \item \textbf{Onion Service:} The destination instance and isolated server hosting a service or application endpoints that listen uniquely to incoming traffic through a pre-arranged anonymous path while preserving the confidentility of its public IP address and network topology.
+    \item \textbf{Directory Authorities:} A cluster of core trusted infrastructure server nodes that collaboratively manage and monitor the network consensus status, calculate the daily Shared Random Values (SRVs), and issue the the network consensus directory each hour required for layout lookups. 
+    \item \textbf{Introduction Point - IPO:} A set of publicly accessible Tor relays arbitrarily selected by the onion service to maintain long-lived and persistent circuits. The operational duty of these nodes is to accept received incoming initialization requests from clients and proxying them to the service via pre-established circuits without knowing its actual location.
+    \item \textbf{Hidden Service Directory - HSDir:} A dynamic subset of Tor relays that meet strict stability and uptime criteria. These nodes are authorized to store and serve signed cryptographic service descriptors within a decentralized and time dependent Distributed Hash Table (DHT) structure known as Hash Ring.
+    \item \textbf{Rendezvous Point - RPO:} Ephemeral relays dynamically chosen by the client on the spot. These nodes act as the neutral nexus where the circuit branches from the client and service safely converge.
 \end{enumerate}
 
-\subsection{Address Generation}
+%(INCLUDE IMAGE THAT EXPLAINS THE NETWORK)
 
-Pending
+The chronological lifecycle required to establish an end-to-end connection between the client and a V3 onion service transitions through a six cryptographic and operational stages:
 
-\subsection{Publication}\label{AA}
+\begin{enumerate}
+    \item \textbf{IPO Setup:} Upon initialization, the V3 onion service generates its root identity key pairs, derives its cryptographic \texttt{.onion} address and establishes individual three-hop circuits to multiple chosen public relays to act as active IPOs.
+    \item \textbf{Descriptor Publication:} The service generates an onion service descriptor containing its public verification keys and the network routing parameters of its IPOs. This document is cryptographically signed using an Ed25519 key-blinding mechanism that daily rotates, and uploaded to a default of eight designated HSDir positions derived methematically on the Hash Ring.
+    \item \textbf{Discovery and Descriptor Retrieval:} The client to reach the target onion address queries the active network consensus along the global SRV to pinpoint and compute the exact HSDir relays responsible of hosting the service's current descriptor and downloading the authenticated record over an anonymous circuit.
+    \item \textbf{Rendezvous Establishment:} The client designates an independent Tor relay from the active consensus pool to act as RPO, builds a separate three-hoop circuit to it and establish a single-use cryptographic secret denominated as rendezvous cookie.
+    \item \textbf{Introduction Delivery:} The client dispatches an encrypted cell (\texttt{INTRODUCE1}), containing the RPO routing descriptors and the rendezvous cookie and encrypted using the service's public key, to one of the service's published IPOs, which blindly forwards it through its pre-established circuit to the hidden service.
+    \item \textbf{Circuit Splicing:} Upon decrypting the cell, the onion service parses the IPO cell, establishes a newly three-hop circuit to the specified RPO and handovers a validation via a (\texttt{RENDEZVOUS1}) cell. The RPO then confirms the cookie matches and joints the two independent streams into a unified six-hop end-to-end circuit.
+\end{enumerate}
+
+\subsection{Address Generation}%TODO: Add references from Tor's official sources and infographics
+
+The Tor version 3 (V3) onion routing introduces a more cryptographically and decentralized naming convention replacing the legacy 16-character version 2 (V2) address space which derivation introduced significant cryptographic
+vulnerabilities including partial-match dictionary collisions, namespace harvesting and lack of support for forward-secure operations. The V3 protocol remediates these vulnerabilities by transitioning to Ed25519 elliptic curve
+cryptography mapping the public key directly into the string encoding of the public identifier serving as self-authentication. This shift increases the \texttt{.onion} address length into a 56-character base32-encoded string,
+eliminating central name authorities dependencies and preventing unauthorized directory harversting from mapping or enumerating hidden application endpoints while proving ownership.
+
+The generation of a valid V3 onion address consists in the congregation of a 35-byte binary payload composed of three crucial fields, then serialized using Base32 encoding:
+
+\begin{enumerate}
+    \item \textbf{Master Public Key (32 bytes):} The Ed25519 master public key ($\mathcal{P}_{k}$) generated by the onion service during its initialization phase and root identity of the hidden service.
+    \item \textbf{Verification Checksum (2 bytes):} A truncated security chunk ($\mathcal{C}_{s}$) calculated derived from cryptographic hash function to ensure string integrity and protect against typos or transmission distortions.
+    \item \textbf{Protocol Version (1 byte):} A fixed administrative byte ($\mathcal{V}$) indicating the technical generation of the protocol explicitly configured to \texttt{0x03} for Tor version 3 (V3).
+\end{enumerate}
+
+To calculate the 2-byte verification checksum, the protocol combines a predefined static string \texttt{".onion checksum"} as a fixed salt, the 32-byte master public key, and the the protocol version byte into a unified byte stream. 
+The stream is processed using the SHA3-256 hashing algorithm, which resulting digest is truncated to its first two bytes:
+\begin{equation}
+\mathcal{C}_{\text{s}} = \text{SHA3-256}\big(\textit{".onion checksum"} \parallel \mathcal{P}_{\text{k}} \parallel \mathcal{V}\big)\big[:2\big]
+\end{equation}
+Once the checksum ($\mathcal{C}_{\text{s}}$) is derived, it is appended to the master public key and the protocol version byte to construct the 35-byte vector. The resulting domain name is produced by converting the 
+byte vector into an Base32 sequence with the domain suffix appended:
+\begin{equation}
+\mathcal{A}_{\text{onion}} = \text{Base32}\big(\mathcal{P}_{\text{k}} \parallel \mathcal{C}_{\text{s}} \parallel \mathcal{V}\big) \parallel \textit{".onion"}
+\end{equation}
+%TODO: Illustration
+%Pending paragraph
+\subsection{Publication and Indexing}\label{AA}
 
 Pending
 
 \subsection{Service Access}
-
-Pending
-
-\subsection{Other Sections}
 
 Pending
 
