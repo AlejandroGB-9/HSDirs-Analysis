@@ -304,20 +304,75 @@ byte vector into an Base32 sequence with the domain suffix appended:
 \mathcal{A}_{\text{onion}} = \text{Base32}\big(\mathcal{P}_{\text{k}} \parallel \mathcal{C}_{\text{s}} \parallel \mathcal{V}\big) \parallel \textit{".onion"}
 \end{equation}
 %TODO: Illustration
-%Pending paragraph
-\subsection{Publication and Indexing}\label{AA}
 
-Pending
+This infrastructure produces direct implications for network telemetry and monitoring. Because the resulting onion address wraps the raw master key ($\textit{P}_{k}$), any external system that captures the service's address
+can extract the inherent cryptographic key. The master identity key acts as the fundamental parameter to calculate daily blinded keys, which govern the exact time dependent coordinates the service will occupy on the network's HRT
+over the given lifecycle.
 
-\subsection{Service Access}
+\subsection{Publication and Indexing}%TODO: Add references from Tor's official sources and infographics
 
-Pending
+To shield hidden services from targeted denial-of-service (DoS) vectors and metadata harversting by adversary directory servers, the Tor version 3 (V3) introduces a key-blinding subsystem along a consistent distributed hashing topology. 
+Rather than uploading static routing records to fixed servers, V3 onion services routinely rotates ephemeral blinded public keys ($\textit{K}_{b}$) to dynamically compute a set of time dependent storage nodes within the HRT. Services
+ensure confidentiality by serializing active routing vectors and cryptographic information in a structural document known as onion descriptor, protected with an architectural encryption to prevent intermediate nodes from harvesting onion addresses
+or identify the services being hosted by it unless they already posses the corresponding credentials.
+
+The derivation of blinded credentials, spatial positioning and temporal rotation descriptors accross the global HRT shifts are governed by two synchronized parameters daily updated within the network consensus, the global SRV and the time period, or temporal epoch. 
+The consensus cluster of directory authorities produce a newly generated SRV every consecutive interval (epoch) defined by the consensus parameter \texttt{hsdir-interval}, which defaults to an operational duration of 1440 minutes (24 hours), at 00:00 UTC over hourly voting intervals:
+
+\begin{enumerate}
+    \item \textbf{Commit Phase (00:00 - 12:00 UTC):} Authorities include cryptographic commitments of privetly generated random numbers within their hourly consensus votes.
+    \item \textbf{Reveal Phase (12:00 - 00:00 UTC):} Authorities expose their random values, validating them against the previous phase's commitments. At 00:00 UTC, the final unified SRV is compiled and appended to the live consensus.
+\end{enumerate}
+
+This shared secret acts a global seed that inforces pseudo-random reshuffling of the entire hash ring, preventing pre-calculation and maintance of malicious nodes adjacent to a target's publication space.
+
+To publish its onion descriptor, the hidden service applies a key-blinding function mixed with the two current synchronized temporal variables to produce the temporal blinded public key $\textit{K}_{\text{b}}$. For each independent publication replica the service derives a distinct 256-bit
+coordinate refer as the service index, where the number of replicas ($\textit{N}_{\text{r}}$) defaults to 2 replicas. The derivation of the service index for a given replica identifier ($\textit{r}$) is as follows:
+\begin{equation}
+\mathcal{HS}_{\text{index}} = \text{SHA3-256}\big(\textit{"store-at-idx"} \parallel \textit{K}_{\text{b}} \parallel \textit{r} \parallel \textit{L}_{\text{p}} \parallel \textit{N}_{\text{p}}\big)
+\end{equation}
+where $\textit{K}_{\text{blinded}}$ represents the blinded public key, $\textit{L}_{\text{p}}$ is the standardized length of the temporal epoch, and $\textit{N}_{\text{p}}$ is the sequential index of the current time period. 
+
+Concurrently, every active relay in the consensus that satisfies specific uptime, stability, and flag requirements (\texttt{HSDir, Stable, Fast}) to operate as HSDir computes its own relative position on the ring, recalculated for each temporal epoch using the global SRV:
+\begin{equation}
+\mathcal{R}_{\text{index}} = \text{SHA3-256}\big(\textit{"node-idx"} \parallel \textit{ID} \parallel \text{SRV} \parallel \textit{N}_{\text{p}} \parallel \textit{L}_{\text{p}}\big)
+\end{equation}
+where $\textit{ID}$ denotes the cryptographic fingerprint of the relay.
+%TODO: Illustration
+Once both indeces are mapped onto the 256-bit circular index table of the HRT, the onion identifies the specific relays in charge of reduntdantly storing the current onion descriptor. The service selects the first distinct HSDir nodes ($\textit{k}$) whose positions on the HRT 
+($\mathcal{R}_{\text{index}}$) immediately succeed the hidden service positions ($\mathcal{HS}_{\text{index}}$), where the pool number of nodes ($\textit{k}$) is given by the consensus parameter \texttt{hsdir-spread-store} explicitly set to 4. Thus, the service initiates a sequence
+of encrypted descriptor uploads to these first 4 unique HSDir nodes indentified for each service index computed, resulting in the descriptor upload to total of 8 distinct HSDir nodes to host and serve the record during the designated time period.
+
+Because these positions shift daily along the global SRV, this parameter along $\textit{N}_{\text{p}}$, $\textit{L}_{\text{p}}$ are publicly observable through the public network consensus files which serve to track a targeted \texttt{.onion} address with an independent system
+to extract the onion's master key, compute $\textit{K}_{\text{b}}$, and determine the exact 8 HSDir relays responsible of hosting the onion's descriptor any given day. This mapping provides the basis to track HSDir node uptime distributions, assess runtime stability or operator entity 
+cluster profiling via IP range correlation.
+
+\subsection{Service Access} %TODO: Add references from Tor's official sources and infographics
+
+Unlike the classical Internet, where a client establishes a direct transport layer socket to an IP address, the Tor version 3 (V3) requires both the client and server to construct separate three-hop virtual circuits which congregation to a mutually agreed intermediate node is referred as
+rendezvous mechanism. This architecture ensures neither end can deduce the routing trajectory, geo-origin and underlying network topology of the opposite party. 
+
+The service access process begins with the client parsing the 56-character \texttt{.onion} address to locate the master public identity key and resolves the inherent Ed25519 public key, which combined with the temporal epoch and SRV retrieved from the network status consensus, the client
+cryptographically computes the target service $\textit{K}_{\text{b}}$ and derive the settled service indices mapped onto the HRT. The client then selects one of the four active HSDir relays appointed to the replica, constructs an anonymous three-hop circuit toward it, and transmits an authenticated
+HTTP GET request to download the signed onion descriptor records.
+
+Upon receiving the payload, the client parses the descriptor utilizing the blinded key structures to verify the descriptor's cryptographic signature and decrypt its inner layer. This extracts the array of active IPOs routing vectors along with their respective public keys and link specifiers, and the 
+service's temporal encryption keys. The connection sequence then diverges into two parallel paths:
+
+\begin{enumerate}
+    \item \textbf{Rendezvous Establishment:} The client selects an external relay from the consensus to act as an isolated cryptographic bridge referred as RPO. A three-hop circuit is constructed toward this node and delivered with an \texttt{ESTABLISH\_RENDEZVOUS} cell, which provisions the relay with a secret and an unique single-use 20-byte rendezvous cookie. Upon acknowledging the setup, the RPO registers the cookie in its active volatile session cache and awaits an inbound circuit connection that presents the corresponding token.
+    \item \textbf{Introduction Delivery:} Simultaneously, the client constructs a three-hop circuit to one of the public IPOs specified in the decrypted descriptor records. An \texttt{INTRODUCE1} authenticated cell is then transmitted to it, which envelops an encrypted message containing the routing specifiers and the matching 20-byte rendezvous cookie encrypted and safeguarded under the service's onion key against intermediate inspection.
+\end{enumerate}
+
+Upon receiving this cell, the IPO forwards the encrypted inner payload to the onion service via an \texttt{INTRODUCE2} cell. The hidden service then decrypts this instruction block using its blinded private key, validates its integrity, draws out the RPO's routoing parameters alongside the 20-byte rendezvous cookie
+and establishes a separate three-hop circuit to the specified RPO relay by submitting a \texttt{RENDEZVOUS1} cell embedded with the matching rendezvous cookie. The RPO finally splices the incoming circuit into a unified six-hoop transparent pipeline facilitating end-to-end forward-secure data streams protected with 
+symmetric encryption keys safeguarding against node sniffing or network-wide traffic correlation attack.
 
 \section{Methodology}
 
 Pending
 
-\subsection{Overview}\label{SCM}
+\subsection{Overview}
 
 Pending
 
