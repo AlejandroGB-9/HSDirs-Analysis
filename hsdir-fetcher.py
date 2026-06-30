@@ -599,6 +599,8 @@ def network_consensus():
     print("[INIT] Launching network status consensus auditor...")
 
     last_hour = datetime.datetime.now(datetime.UTC).hour
+    last_day = datetime.datetime.now(datetime.UTC).day
+    last_month = datetime.datetime.now(datetime.UTC).month
     state_updates = {}
 
     print("[CONSENSUS] Consensus tracking engine started.")
@@ -621,8 +623,11 @@ def network_consensus():
             now = datetime.datetime.now(datetime.UTC)
             timestamp = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
+            diff_day = (last_day != now.day)
+            diff_month = (last_month != now.month)
+
             # Refresh + rotated status HSDirs
-            if now.hour == 0:
+            if diff_day or diff_month:
                 print("[AUDITOR] 00:05 UTC - Processing historical HSDirs states...")
                 if network_wide_hsdirs:
                     with network_wide_lock:
@@ -633,6 +638,11 @@ def network_consensus():
 
                     hour_changed = (last_hour != now.hour)
                     rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_network_hsdir_consensus_snapshots.jsonl")
+
+                if diff_day:
+                    last_day = datetime.datetime.now(datetime.UTC).day
+                if last_month:
+                    last_month = datetime.datetime.now(datetime.UTC).month
                         
                 minute_check = datetime.datetime.now(datetime.UTC).minute
                 if minute_check >= CONSENSUS_START_MIN:
@@ -958,6 +968,8 @@ def consensus_monitor():
     print("[INIT] Launching network status consensus auditor...")
 
     last_hour = datetime.datetime.now(datetime.UTC).hour
+    last_day = datetime.datetime.now(datetime.UTC).day
+    last_month = datetime.datetime.now(datetime.UTC).month
     state_updates = {}
 
     print("[CONSENSUS] Consensus tracking engine started.")
@@ -980,8 +992,11 @@ def consensus_monitor():
             now = datetime.datetime.now(datetime.UTC)
             timestamp = datetime.datetime.now(datetime.UTC).replace(second=0, microsecond=0, tzinfo=None).isoformat(timespec="minutes")
 
+            diff_day = (last_day != now.day)
+            diff_month = (last_month != now.month)
+
             # Refresh + rotated status HSDirs
-            if now.hour == 0:
+            if diff_day or diff_month:
                 print("[AUDITOR] 00:05 UTC - Processing historical HSDirs states...")
                 if tracked_target_hsdirs:
                     with hsdir_state_lock:
@@ -992,7 +1007,12 @@ def consensus_monitor():
 
                     hour_changed = (last_hour != now.hour)
                     rotated_hsdir_monitor(rotated_hsdirs, rotated_updates, hour_changed, timestamp, "rotated_tracked_hsdir_consensus_snapshots.jsonl")
-                        
+                    
+                if diff_day:
+                    last_day = datetime.datetime.now(datetime.UTC).day
+                if last_month:
+                    last_month = datetime.datetime.now(datetime.UTC).month
+
                 minute_check = datetime.datetime.now(datetime.UTC).minute
                 if minute_check >= CONSENSUS_START_MIN:
                     for _ in range(180):
@@ -1135,7 +1155,7 @@ def consensus_monitor():
                             tracked_target_hsdirs.pop(fingerprint, None)
                             state_updates.pop(fingerprint, None)
 
-                    time.sleep(random.uniform(1.2,2.2))
+                    time.sleep(random.uniform(0.2,0.7))
 
                 save_json_log("tracked_hsdir_consensus_snapshots.jsonl", {
                     "timestamp": timestamp,
