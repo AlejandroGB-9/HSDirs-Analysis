@@ -370,15 +370,76 @@ symmetric encryption keys safeguarding against node sniffing or network-wide tra
 
 \section{Methodology}
 
-Pending
+To investigate and analyze the architectural security, runtime, stability, behaviour and Sybil deployments within Tor version 3 (V3) HSDirs, a non-intrusive and reliable tracking framework is designed. Rather than relying in on historical third-party directory archives which lack granularity, an automated and concurrent 
+program was developed and executed during one-month time-period. The measurement infrastructure interacts directly with a local Tor instance via its asynchronous control port pipeline. The core approach of this methodology is the real-time interception of routing descriptors and propagation, track individual relay flag 
+churn, state fluctuations, availability on the HRT and isolate structural network identifiers from the live network.
 
-\subsection{Overview}
+\subsection{Concurrent System Architecture and State Synchronization}
 
-Pending
+The measurement framework operates continuously over a set of decoupled multi-threaded structure to isolate telemetry vectors and maintain a minimal overload and performance of Tor's control port socket. The high throughput and directory update rates across the network would bring forth thread blockages and risk frame 
+drops on the asynchronous controller stream in a single-threaded architecture. Consequently, the architecture separates its duties across five autonomous and persistent threads under a strict lock-synchronized schema to prevent race conditions and transaction deadlocks during continuous disk write operations.
 
-\subsection{Others related (Consensus, Prober, etc)}
+To prevent filesystem I/O bottlenecks when logging dense network events, a collection of transaction-safe locks are instantiated and uniquely mapped to individual JSON lines (\texttt{.jsonl}) logging files. At the same time, independent memory-state locks are allocated to manage runtime mutations to shared memory containers,
+preventing data corruption when multiple monitoring components concurrently access or modify relay data.
 
-Pending
+The framework restricts its data collection to all available relays on the network, a distinct target collection containing controlled static endpoints, a selected third-party endpoint probes, and a scalable pool of ephemeral addresses generated dynamically at runtime. By monitoring this mixed collection of hidden service 
+categories, the system ensures comprehensive coverage across distinct regions of the HRT.
+
+A five-thread colletion pipeline splits with each thread targeting a specific operational routine:
+
+\begin{enumerate}
+    \item \textbf{Statful Consensus Auditing and Sybil Vector Extraction:} These threads are driven by two independent consensus tracking routines, network-wide consensus monitor and tracked HSDirs status monitor. Triggered hourly at XX:05 UTC, these modules ingest the global and tracked directory network consensus information to map the state of active global and tracked relays. The audit engine reads the microdescriptor headers of every operational relay flagged with \texttt{HSDir, Stable} and \texttt{Fast} properties, mapping their IP addresses, nickname, open Onion Routing (OR) ports, and cryptographic fingerprints. Implemented with a microdescriptor parser bypass, sybil identity markers and flag clustered relays operated by coordinated entities are extracted with the capture of raw declared family lists and cryptographic \texttt{famil\_ids} vectors. Tracked active node that disappear from the consensus directory accumulates hourly absenses considering an offline churn; a consecutive absense count of $\geq$ 2 sets off an state reassignment to a dead-offline churn, capturing long-lived relay drop rates.
+    \item \textbf{Active Outbound Prober:} A dedicated prober operating on a fixed periodic 20-minute loop. The mechanism randomizes the target request queue and dispatches raw asynchronous \texttt{HSFETCH} instruction lookups directly to the control port socket. These queries bypass Tor's internal circuit-level memory dependencies within the local Tor client, forcing the daemon to query teh remote directory nodes directly. This method discloses silent failues where a node listed as online cannot serve requested descriptors. To achieve complete coverage a two-tier lookup is triggered, a standard dynamic hash ring resolution, and a direct poll targeted at individual fingerprints historically recorded in memory as active hosting relays. These lookup patterns compels the local Tor daemon to query the remote relays directly, causing an asynchronous event listener to log the resulting network events.
+	\item \textbf{Asynchronous Event Listener:} Thread instantiated to establish a persistent, isolated, direct subscription to the controller's internal \texttt{HS\_DESC} stream event pipeline, which tracks real-time descriptor uploads, fetch requests, and operational failures.
+    \item \textbf{Scaled Ephemeral Manager:} To scale the observation scope and neutralize spatial placement bias inherent to a set of static domains, this runtime allocation script automatically invokes Tor control commands to dynamically deploy fifty detached , ephemeral hidden service endpoints and cycled at regular daily intervals. These generated cryptographic addresses are automatically appended to the active tracking set memory, and spreaded across the HRT ensuring broader statistical sampling across the decentralized DHT ring space.
+\end{enumerate}
+
+\subsection{Hash Ring Mapping and Low-Level Protocol Parsing}
+
+A significant engineering barrier rised upon the degradation of the primary Python control library \texttt{Stem} for several years since June 2023, which lacks support of native parsing tailored to the modern version 3 onion service architecture. To bypass this limitation without sacrificing data granularity, 
+custom protocol-level bypasses were introduced. Instead of using the broken library abstractions, the script builds isolated channels to prevent control port command congestion and interact directly with the raw socket stream. 
+
+While the targeted consensus auditing can directly query (\texttt{.get\_microdescriptor()}) and partially parse relay consensus streams, the global consensus audit downloads unparsed consensus streams via raw \texttt{get\_info("dir/status-vote/current/consensus-micr} \texttt{odesc")}. It then extracts critical 
+metrics and processes the text files using custom-built parsing that manually extracts the global SRV, decodes base64-encoded relay components, and handles raw-byte structures to compute the 32-byte HRT coordinate positions. 
+
+These bypasses allows the framework to replicate the 32-byte DHT ring topology, which by capturing the global SRV and individual relay identity keys ($\textit{K}_{\text{ID}}$) from the consensus
+, and parsing the current time period ($\textit{T}_{\text{p}}$), calculates the precise position index of every directory node using native SHA3-256 hashing routine:
+\begin{equation}
+\mathcal{R}_{\text{index}} = \text{SHA3-256}\big(\textit{K}_{\text{ID}} \parallel \textit{T}_{\text{p}} \parallel \textit{SRV} \big)
+\end{equation}
+The tracked consensus contrary to the network-wide consensus exclusively extracts the unique 40-character hexadecimal hash ring coordinate (\texttt{HSDIR\_INDEX}), the base64-encoded blinded public descriptor identifier which requires knowing the target 35-byte onion service address, and the server-side validation 
+error reasons from the asynchronous event listener, which populates the shared memory container for targeted directory nodes. Then evaluates the clockwise distance $\Delta$ between a directory's coordinate $\textit{I}_{\text{HSDir}}$ on the HRT and the target onion service descriptor index $\textit{I}_{\text{onion}}$ 
+across the circular ring space $\mathcal{M} = 2^{256}$:
+\begin{equation}
+\Delta = \left( I_{\text{HSDir}} - I_{\text{onion}} \right) \pmod{2^{256}}
+\end{equation}
+This distance is subsequently converted into a normalized position percentage relative to the total ring space to chart wether monitored directories are distributed uniformly or clustered around specific identities.
+
+\subsection{Temporal Synchronization and Boundary Isolation}
+
+A foundational requisite of the measurement system is the management of daily SRV transaction and the subsequent reshuffling of the hash ring coordinates and active blinded keys, which Tor V3 protocol enforces the rotation exactly at 00:00 UTC. 
+
+To prevent data contamination from overlapping consensus epochs, the framework
+enforces a strict exclusion boundary window spanning from 23:55 UTC to 00:07 UTC. During this interval, live network probes and live event captures are suspended or systematically filtered.
+
+To provide directory authorities sufficient time to settle their consensus voting and distribute the updated SRV across the network, the framework uses staggered offsets to resume tracking:
+
+Old ephemeral service nodes are terminated and newly deployed at 00:01 UTC. Precisely at 00:05 UTC, upon verifying a calendar day or month rollover, the active runtime directory nodes on 
+shared memory, network-wide and targeted, are state verified on the new calendar rollover over a script routine, archived to a disk \texttt{.jsonl} log file, flushed from shared memory, and
+re-initialized to a blank vector slate. Active outbound network probes resume at 00:08 UTC, and tracked and network-wide consensus audits re-engaged at 00:10 UTC. 
+
+This synchronized time structure ensures that all local tracking states, rotated blinded keys, and newly designated remote directory authorities have fully stabilized across the network 
+before data collection resumes, preserving high-fidelity of long-term churn measurements.
+
+\subsection{Structural Sybil Footprint Indentification}
+
+An analytical objective is differentiate random, isolated relay failures from systematic disruptions managed by large-scale coordinated node operators. When a monitored HSDir drops from the network
+or fails to serve valid descriptor, the framework collects structural identity markers to detect potential Sybil concentrations based on selected criteria:
+
+\begin{itemize}
+    \item \textbf{Network Prefix Aggregation:} The framework maps IPv4 and IPv6 addresses of every directory node into standard \texttt{/16} and \texttt{/24} subnets. This grouping isolates cases where a single operator deploys multiple discrete directory nodes into the consensus within identical data center allocations or IP routing subnets to artificially influence a section of the HRT.
+    \item \textbf{Declared and Effective Administrative Families:} The microdescriptor records are parsed hourly to extract both declared relay family identifiers and mutual recognized effective family lists. This tracks evaluate compliance with Tor's administrative policies and flags undeclared Sybil networks that exhibit identical uptime profiles or infrastructure features while omitting formal administrative declarations.
+\end{itemize}
 
 \begin{table}[htbp]
 \caption{Table Type Styles}
