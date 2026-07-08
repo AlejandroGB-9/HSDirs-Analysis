@@ -147,7 +147,6 @@ def validate_sort_data(csv_path):
             df[col] = df[col].fillna('None').astype(str)
             df[col] = df[col].replace(['nan', 'NaN', 'None', ''], 'None')
             
-    # CRITICAL EVALUATION: Safely re-hydrate stringified lists back into lists
     if "declared_family" in df.columns:
         def parse_csv_family_list(val):
             if isinstance(val, (list, tuple, np.ndarray)):
@@ -979,8 +978,7 @@ def compute_sybil_family_id_distribution(df_slice, context_label):
 
     df_daily_matrix = pd.DataFrame()
 
-    # Process metrics under a standardized suffix
-    for records, prefix_suffix in [(daily_records, "family_id")]:
+    for records, prefix_suffix in [(daily_records, "declared_family_id")]:
         if not records:
             print(f"[SYBIL-FAM-INFO] No valid cryptographic family records generated under label: {context_label}")
             continue
@@ -1089,6 +1087,382 @@ def calculate_sybil_family_id_distributions(df, context_label):
     return global_reporting_matrix
 
 
+# ANALYSIS 6: SYBIL PATTERN FOR DECLARED FAMILY LISTS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
+def compute_sybil_family_list_distribution(df_slice, context_label):
+    output_dir = "analysis-results/sybil_family_lists"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if df_slice.empty or "declared_family" not in df_slice.columns or "fingerprint" not in df_slice.columns:
+        print(f"[SYBIL-FAM-LIST-ERROR] Missing critical structural fields for label: {context_label}")
+        return None
+            
+    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
+    if df_unstable.empty:
+        print(f"[SYBIL-FAM-LIST-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
+        return None
+
+    def generate_canonical_cluster_id(row):
+        node_fp = row.get("fingerprint")
+        family_list = row.get("declared_family")
+        
+        if not isinstance(family_list, (list, tuple, np.ndarray)):
+            return "Unknown"
+            
+        combined_set = set()
+        if isinstance(node_fp, str) and node_fp not in ["None", "Unknown", ""]:
+            combined_set.add(node_fp.strip().upper())
+            
+        for item in family_list:
+            if isinstance(item, str) and item not in ["None", "Unknown", ""]:
+                combined_set.add(item.strip().upper())
+                
+        if not combined_set or (len(combined_set) == 1 and node_fp in combined_set):
+            return "Unknown"
+            
+        return ",".join(sorted(list(combined_set)))
+
+    df_unstable["canonical_family_group"] = df_unstable.apply(generate_canonical_cluster_id, axis=1)
+    
+    df_unstable = df_unstable[df_unstable["canonical_family_group"] != "Unknown"]
+    if df_unstable.empty:
+        print(f"[SYBIL-FAM-LIST-INFO] No active family relationships found for label: {context_label}")
+        return None
+
+    unique_clusters = df_unstable["canonical_family_group"].unique()
+    operator_label_map = {}
+    for idx, cluster in enumerate(unique_clusters):
+        first_fp = cluster.split(',')[0]
+        short_id = first_fp[:6] if len(first_fp) >= 6 else f"Grp{idx}"
+        operator_label_map[cluster] = f"Operator_{short_id}"
+        
+    df_unstable["operator_identifier"] = df_unstable["canonical_family_group"].map(operator_label_map)
+
+    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None', None]]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+
+    daily_records = []
+
+    for obs_day in unique_days_sorted:
+        day_data = df_unstable[df_unstable["date"] == obs_day]
+        
+        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
+        
+        counts = day_unique["operator_identifier"].value_counts()
+        for op_id, count in counts.items():
+            daily_records.append({
+                "Observation Date": obs_day,
+                "Operator Identifier": op_id,
+                "Count": count
+            })
+
+    df_daily_matrix = pd.DataFrame()
+
+    for records, prefix_suffix in [(daily_records, "family_list")]:
+        if not records:
+            print(f"[SYBIL-FAM-LIST-INFO] No valid operator records generated under label: {context_label}")
+            continue
+            
+        df_raw_counts = pd.DataFrame(records)
+        
+        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Operator Identifier", values="Count").fillna(0)
+        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
+        
+        all_operators = list(df_pivot.columns)
+        if not all_operators:
+            continue
+        
+        df_daily_matrix = df_pivot.reset_index()
+        daily_summary_baseline = {"Observation Date": "Overall Average"}
+        for col in all_operators:
+            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
+        
+        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
+        df_daily_export.to_csv(f"{output_dir}/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(13, 7))
+        has_plotted_daily = False
+        for col in all_operators:
+            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series.notna().any():
+                has_plotted_daily = True
+                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
+                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_daily:
+            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (by Mutual Family List Mapping)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline")
+            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
+            plt.xticks(rotation=45)
+            plt.legend(title="Identified Entity Operators", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/{context_label}_daily_plot_{prefix_suffix}.png")
+        plt.close()
+        
+        df_weekly_prep = df_daily_matrix.copy()
+        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+        
+        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_operators].mean().reset_index()
+        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+        
+        for col in all_operators:
+            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+            
+        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
+        for col in all_operators:
+            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
+            
+        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
+        df_weekly_export.to_csv(f"{output_dir}/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(11, 6))
+        has_plotted_weekly = False
+        for col in all_operators:
+            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series_weekly.notna().any():
+                has_plotted_weekly = True
+                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
+                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_weekly:
+            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (by Mutual Family List Mapping)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline (Weeks)")
+            plt.ylabel("Mean Unique Fingerprint Count")
+            plt.legend(title="Identified Entity Operators", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/{context_label}_weekly_plot_{prefix_suffix}.png")
+        plt.close()
+
+    print(f"[SYBIL-FAM-LIST-INFO] Family List matrices saved successfully for context: '{context_label}'")
+    return df_daily_matrix if not df_daily_matrix.empty else None
+
+
+def calculate_sybil_family_list_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN FAMILY LIST DISTRIBUTION ANALYSIS")
+    if df is None or df.empty:
+        print(f"[SYBIL-FAM-LIST-ERROR] Missing layout arrays for context '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_sybil_family_list_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating list-family metrics for specific service type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_sybil_family_list_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
+# ANALYSIS 7: TRACKING CHRONOLOGICAL HSDIR SESSION UPTIME WINDOWS (DAILY & WEEKLY VIEW)
+def compute_uptime_distribution(df_slice, context_label):
+    os.makedirs("analysis-results/uptime_distributions", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if "hour" not in df_slice.columns or "fingerprint" not in df_slice.columns:
+        print(f"[UPTIME-ERROR] Missing critical structural fields ('hour' or 'fingerprint') for label: {context_label}")
+        return None
+
+    df_working = df_slice.copy()
+    
+    if df_working["hour"].dtype == object or isinstance(df_working["hour"].iloc[0], str):
+        if df_working["hour"].str.contains(":").any():
+            hour_parts = df_working["hour"].str.split(":", expand=True)
+            df_working["hour_num"] = hour_parts[0].astype(int) + hour_parts[1].astype(int) / 60.0
+        else:
+            df_working["hour_num"] = pd.to_numeric(df_working["hour"], errors='coerce').fillna(0)
+    else:
+        df_working["hour_num"] = df_working["hour"].astype(float)
+    
+    unique_days = [d for d in df_working["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+    
+    for observation_day in unique_days_sorted:
+        day_data = df_working[df_working["date"] == observation_day]
+        all_sessions_durations = []
+        
+        for fp in day_data["fingerprint"].unique():
+            df_fp = day_data[day_data["fingerprint"] == fp].sort_values(by="hour_num")
+            
+            current_start = None
+            current_last = None
+            
+            for _, row in df_fp.iterrows():
+                is_active = row["status"] in ["ACTIVE_IN_RING", "None"]
+                
+                has_temporal_gap = (current_last is not None) and (row["hour_num"] - current_last > 2.5)
+                
+                if is_active and not has_temporal_gap:
+                    if current_start is None:
+                        current_start = row["hour_num"]
+                    current_last = row["hour_num"]
+                else:
+                    if current_start is not None:
+                        duration = max(1.0, current_last - current_start)
+                        all_sessions_durations.append(duration)
+                    
+                    if is_active:
+                        current_start = row["hour_num"]
+                        current_last = row["hour_num"]
+                    else:
+                        current_start = None
+                        current_last = None
+            
+            if current_start is not None:
+                duration = max(1.0, current_last - current_start)
+                all_sessions_durations.append(duration)
+                
+        total_unique_sessions = len(all_sessions_durations)
+        if total_unique_sessions == 0:
+            continue
+            
+        durations_arr = np.array(all_sessions_durations)
+        
+        mean_uptime   = durations_arr.mean()
+        median_uptime = np.median(durations_arr)
+        max_uptime    = durations_arr.max()
+        min_uptime    = durations_arr.min()
+        
+        full_uptime_count  = np.sum(durations_arr >= 20)
+        high_uptime_count  = np.sum((durations_arr >= 12) & (durations_arr < 20))
+        mod_uptime_count   = np.sum((durations_arr >= 6) & (durations_arr < 12))
+        low_uptime_count   = np.sum(durations_arr < 6)
+        
+        computed_metrics.append({
+            "Observation Date": observation_day,
+            "Total HSDir Sessions": total_unique_sessions,
+            "Mean Session Uptime (hrs)": round(mean_uptime, 2),
+            "Median Session Uptime (hrs)": round(median_uptime, 2),
+            "Max Session Uptime (hrs)": int(max_uptime),
+            "Min Session Uptime (hrs)": int(min_uptime),
+            "Full Uptime (>=20h)": int(full_uptime_count),
+            "High Uptime (12-19h)": int(high_uptime_count),
+            "Moderate Uptime (6-11h)": int(mod_uptime_count),
+            "Low Uptime (<6h)": int(low_uptime_count)
+        })
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[UPTIME-WARNING] Summary matrix empty for context: {context_label}")
+        return None
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Mean Session Uptime (hrs)"], marker='o', color='purple', linewidth=2, label='Mean Session Duration')
+    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Median Session Uptime (hrs)"], marker='s', color='teal', linewidth=2, label='Median Session Duration')
+    
+    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Mean Session Uptime (hrs)"]):
+        plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Median Session Uptime (hrs)"]):
+        plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+        
+    plt.title(f"Tor v3 HSDir Daily Active Session Lifespan Profile ({context_label.replace('_', ' ').title()})")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Session Duration Value (Hours)")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(f"analysis-results/uptime_distributions/{context_label}_hsdir_daily_uptime_distribution.png")
+    plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
+        "Total HSDir Sessions": "mean",
+        "Mean Session Uptime (hrs)": "mean",
+        "Median Session Uptime (hrs)": "mean",
+        "Max Session Uptime (hrs)": "max",
+        "Min Session Uptime (hrs)": "min",
+        "Full Uptime (>=20h)": "mean",
+        "High Uptime (12-19h)": "mean",
+        "Moderate Uptime (6-11h)": "mean",
+        "Low Uptime (<6h)": "mean"
+    }).reset_index()
+    
+    for col in df_weekly_matrix.columns:
+        if col != "WeekIndex":
+            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+            
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+    
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Mean Session Uptime (hrs)"], marker='^', color='indigo', linewidth=2, label='Weekly Mean Uptime Baseline')
+        
+        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Mean Session Uptime (hrs)"]):
+            plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+        plt.title(f"Tor v3 Weekly Averaged HSDir Active Session Profile ({context_label.replace('_', ' ').title()})")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Mean Hours Operational")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/uptime_distributions/{context_label}_hsdir_weekly_uptime_distribution.png")
+        plt.close()
+        
+        weekly_totals = {"Observation Week": "Overall Weekly Average"}
+        for col in df_weekly_matrix.columns:
+            if col != "Observation Week":
+                weekly_totals[col] = round(df_weekly_matrix[col].mean(), 2)
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/uptime_distributions/{context_label}_hsdir_weekly_uptime_matrix.csv", index=False)
+
+    daily_totals = {"Observation Date": "Overall Average"}
+    for col in df_summary_matrix.columns:
+        if col != "Observation Date":
+            daily_totals[col] = round(df_summary_matrix[col].mean(), 2)
+            
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_summary_matrix_export.to_csv(f"analysis-results/uptime_distributions/{context_label}_hsdir_daily_uptime_matrix.csv", index=False)
+    
+    print(f"[UPTIME-INFO] Complete operational active matrices saved under context label: '{context_label}'")
+    return df_summary_matrix
+
+def calculate_hsdir_uptime_distributions(df, context_label):
+
+    print(f"PROCESSING {context_label.upper()} CONTINUOUS INSTANCE SESSION UPTIME DISCOVERY DISTRIBUTION ANALYSIS")
+    if df is None or df.empty:
+        print(f"[UPTIME-ERROR] Missing valid data slice matrix layouts for context '{context_label}'.")
+        return None
+        
+    global_reporting_matrix = compute_uptime_distribution(df, context_label)
+
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating continuous active session lifetimes for onion type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_uptime_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
 # MAIN
 if __name__ == "__main__":
     print("="*60)
@@ -1185,6 +1559,32 @@ if __name__ == "__main__":
 
     if df_rot_track is not None:
         calculate_sybil_family_id_distributions(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING SYBIL FAMILY LIST PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_sybil_family_list_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_sybil_family_list_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_sybil_family_list_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_sybil_family_list_distributions(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING HSDIR UPTIME DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_hsdir_uptime_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_hsdir_uptime_distributions(df_track_consensus, context_label="tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
