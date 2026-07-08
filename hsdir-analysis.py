@@ -88,10 +88,42 @@ def extract_telemetry(target_filename):
             
     if "flags" in df_processed.columns:
         df_processed.drop(columns=["flags"], inplace=True, errors='ignore')
+
+    if "declared_family_id" in df_processed.columns:
+        df_processed["declared_family_id"] = df_processed["declared_family_id"].astype(str).replace(['nan', 'NaN', 'None', '0', '0.0', '', ' '], 'None')
+        df_processed["declared_family_id"] = df_processed["declared_family_id"].fillna('None')
+    else:
+        df_processed["declared_family_id"] = 'None'
+
+    if "declared_family" in df_processed.columns:
+        def clean_initial_family(val):
+            if isinstance(val, (list, tuple, np.ndarray)):
+                return list(val)
+                
+            if pd.isna(val) or val is None or val in ['None', 'nan', 'NaN', '[]', '', ' ']:
+                return []
+                
+            if isinstance(val, str):
+                val_stripped = val.strip()
+                if val_stripped.startswith('[') and val_stripped.endswith(']'):
+                    try:
+                        parsed = ast.literal_eval(val_stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except Exception:
+                        pass
+                return [val_stripped]
+            return []
+            
+        df_processed["declared_family"] = df_processed["declared_family"].apply(clean_initial_family)
+    else:
+        df_processed["declared_family"] = [[] for _ in range(len(df_processed))]
         
     for col in df_processed.columns:
+        if col == "declared_family":
+            continue
         if df_processed[col].dtype == 'object':
-            df_processed[col] = df_processed[col].astype(str).replace(['nan', '0', '0.0','',' '], 'None')
+            df_processed[col] = df_processed[col].astype(str).replace(['nan', '0', '0.0', '', ' '], 'None')
         elif pd.api.types.is_numeric_dtype(df_processed[col]):
             df_processed[col] = df_processed[col].fillna(0)
         else:
@@ -113,6 +145,29 @@ def validate_sort_data(csv_path):
     for col in df.columns:
         if col in ['ip_address', 'fingerprint', 'status', 'onion_address', 'action', 'reason', 'declared_family_id', 'timestamp_dropped', 'service_type']:
             df[col] = df[col].fillna('None').astype(str)
+            df[col] = df[col].replace(['nan', 'NaN', 'None', ''], 'None')
+            
+    # CRITICAL EVALUATION: Safely re-hydrate stringified lists back into lists
+    if "declared_family" in df.columns:
+        def parse_csv_family_list(val):
+            if isinstance(val, (list, tuple, np.ndarray)):
+                return list(val)
+            if pd.isna(val) or val is None:
+                return []
+            val_str = str(val).strip()
+            if val_str in ['None', 'nan', 'NaN', '', '[]']:
+                return []
+            if val_str.startswith('[') and val_str.endswith(']'):
+                try:
+                    parsed = ast.literal_eval(val_str)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+            return [val_str]
+        df["declared_family"] = df["declared_family"].apply(parse_csv_family_list)
+    else:
+        df["declared_family"] = [[] for _ in range(len(df))]
     
     sort_columns = []
     if "date" in df.columns:
@@ -714,6 +769,326 @@ def calculate_hrt_index_distributions(df, context_label):
     return global_reporting_matrix
 
 
+# ANALYSIS 4: SYBIL PATTERN FOR /16 AND /24 IP BLOCKS DISTRIBUTIONS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
+def compute_sybil_pattern_ip_distribution(df_slice, context_label):
+    os.makedirs("analysis-results/sybil_ip_blocks", exist_ok=True)
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if df_slice.empty or "ip_address" not in df_slice.columns or "fingerprint" not in df_slice.columns:
+        print(f"[SYBIL-IP-ERROR] Missing critical structural fields for label: {context_label}")
+        return None
+            
+    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
+    if df_unstable.empty:
+        print(f"[SYBIL-IP-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
+        return None
+
+    def extract_v4_subnet(ip, prefix_mask):
+        if isinstance(ip, str) and ip != 'None' and '.' in ip:
+            segments = ip.split('.')
+            if prefix_mask == 24 and len(segments) >= 3:
+                return f"{segments[0]}.{segments[1]}.{segments[2]}.0/24"
+            elif prefix_mask == 16 and len(segments) >= 2:
+                return f"{segments[0]}.{segments[1]}.0.0/16"
+        return "Unknown"
+
+    df_unstable["subnet_24"] = df_unstable["ip_address"].apply(lambda ip: extract_v4_subnet(ip, 24))
+    df_unstable["subnet_16"] = df_unstable["ip_address"].apply(lambda ip: extract_v4_subnet(ip, 16))
+
+    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+
+    daily_records_24 = []
+    daily_records_16 = []
+
+    for obs_day in unique_days_sorted:
+        day_data = df_unstable[df_unstable["date"] == obs_day]
+        
+        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
+        
+        counts_24 = day_unique["subnet_24"].value_counts()
+        for subnet, count in counts_24.items():
+            if subnet != "Unknown":
+                daily_records_24.append({
+                    "Observation Date": obs_day,
+                    "Subnet": subnet,
+                    "Count": count
+                })
+                
+        counts_16 = day_unique["subnet_16"].value_counts()
+        for subnet, count in counts_16.items():
+            if subnet != "Unknown":
+                daily_records_16.append({
+                    "Observation Date": obs_day,
+                    "Subnet": subnet,
+                    "Count": count
+                })
+
+    df_daily_matrix = pd.DataFrame()
+
+    for mask, records, prefix_suffix in [(24, daily_records_24, "24"), (16, daily_records_16, "16")]:
+        if not records:
+            print(f"[SYBIL-IP-INFO] No valid records generated for /{mask} under label: {context_label}")
+            continue
+            
+        df_raw_counts = pd.DataFrame(records)
+        
+        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Subnet", values="Count").fillna(0)
+        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
+        
+        all_subnets = list(df_pivot.columns)
+        if not all_subnets:
+            continue
+        
+        df_daily_matrix = df_pivot.reset_index()
+        daily_summary_baseline = {"Observation Date": "Overall Average"}
+        for col in all_subnets:
+            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
+        
+        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
+        df_daily_export.to_csv(f"analysis-results/sybil_ip_blocks/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(13, 7))
+        has_plotted_daily = False
+        for col in all_subnets:
+            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series.notna().any():
+                has_plotted_daily = True
+                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
+                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_daily:
+            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (/{mask} Blocks)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline")
+            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
+            plt.xticks(rotation=45)
+            plt.legend(title="Network Blocks", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/sybil_ip_blocks/{context_label}_daily_plot_{prefix_suffix}.png")
+        plt.close()
+        
+        df_weekly_prep = df_daily_matrix.copy()
+        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+        
+        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_subnets].mean().reset_index()
+        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+        
+        for col in all_subnets:
+            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+            
+        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
+        for col in all_subnets:
+            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
+            
+        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
+        df_weekly_export.to_csv(f"analysis-results/sybil_ip_blocks/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(11, 6))
+        has_plotted_weekly = False
+        for col in all_subnets:
+            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series_weekly.notna().any():
+                has_plotted_weekly = True
+                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
+                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_weekly:
+            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (/{mask} Blocks)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline (Weeks)")
+            plt.ylabel("Mean Unique Fingerprint Count")
+            plt.legend(title="Network Blocks", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/sybil_ip_blocks/{context_label}_weekly_plot_{prefix_suffix}.png")
+        plt.close()
+
+    print(f"[SYBIL-IP-INFO] Metric matrices saved successfully for context: '{context_label}'")
+    return df_daily_matrix if not df_daily_matrix.empty else None
+
+
+def calculate_sybil_pattern_ip_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN IP DISTRIBUTION ANALYSIS")
+    if df is None or df.empty:
+        print(f"[SYBIL-IP-ERROR] Missing layout arrays for context '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_sybil_pattern_ip_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating metrics for specific service type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_sybil_pattern_ip_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
+# ANALYSIS 5: SYBIL PATTERN FOR DECLARED FAMILY IDS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
+def compute_sybil_family_id_distribution(df_slice, context_label):
+    os.makedirs("analysis-results/sybil_family_ids", exist_ok=True)
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if df_slice.empty or "declared_family_id" not in df_slice.columns or "fingerprint" not in df_slice.columns:
+        print(f"[SYBIL-FAM-ERROR] Missing critical structural fields for label: {context_label}")
+        return None
+            
+    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
+    if df_unstable.empty:
+        print(f"[SYBIL-FAM-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
+        return None
+
+    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None', None]]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+
+    daily_records = []
+
+    for obs_day in unique_days_sorted:
+        day_data = df_unstable[df_unstable["date"] == obs_day]
+        
+        # Avoid double-counting the same node on the same day
+        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
+        
+        counts = day_unique["declared_family_id"].value_counts()
+        for fam_id, count in counts.items():
+            # Filter out empty, missing, or explicitly null representations
+            if fam_id not in ["Unknown", "None", None, "", "nan", "null"]:
+                daily_records.append({
+                    "Observation Date": obs_day,
+                    "Family ID": fam_id,
+                    "Count": count
+                })
+
+    df_daily_matrix = pd.DataFrame()
+
+    # Process metrics under a standardized suffix
+    for records, prefix_suffix in [(daily_records, "family_id")]:
+        if not records:
+            print(f"[SYBIL-FAM-INFO] No valid cryptographic family records generated under label: {context_label}")
+            continue
+            
+        df_raw_counts = pd.DataFrame(records)
+        
+        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Family ID", values="Count").fillna(0)
+        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
+        
+        all_families = list(df_pivot.columns)
+        if not all_families:
+            continue
+        
+        df_daily_matrix = df_pivot.reset_index()
+        daily_summary_baseline = {"Observation Date": "Overall Average"}
+        for col in all_families:
+            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
+        
+        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
+        df_daily_export.to_csv(f"analysis-results/sybil_family_ids/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(13, 7))
+        has_plotted_daily = False
+        for col in all_families:
+            # Filter low density lines if desired; lowered threshold slightly to catch smaller explicit clusters
+            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series.notna().any():
+                has_plotted_daily = True
+                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
+                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_daily:
+            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (by Cryptographic Family ID)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline")
+            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
+            plt.xticks(rotation=45)
+            plt.legend(title="Family Identifiers", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/sybil_family_ids/{context_label}_daily_plot_{prefix_suffix}.png")
+        plt.close()
+        
+        df_weekly_prep = df_daily_matrix.copy()
+        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+        
+        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_families].mean().reset_index()
+        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+        
+        for col in all_families:
+            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+            
+        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
+        for col in all_families:
+            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
+            
+        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
+        df_weekly_export.to_csv(f"analysis-results/sybil_family_ids/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
+        
+        plt.figure(figsize=(11, 6))
+        has_plotted_weekly = False
+        for col in all_families:
+            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
+            
+            if plot_series_weekly.notna().any():
+                has_plotted_weekly = True
+                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
+                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
+                    if y_val >= 5:
+                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
+                        
+        if has_plotted_weekly:
+            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (by Cryptographic Family ID)\nDataset Segment: {context_label.replace('_', ' ').title()}")
+            plt.xlabel("Observation Timeline (Weeks)")
+            plt.ylabel("Mean Unique Fingerprint Count")
+            plt.legend(title="Family Identifiers", loc="upper left", bbox_to_anchor=(1.02, 1))
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/sybil_family_ids/{context_label}_weekly_plot_{prefix_suffix}.png")
+        plt.close()
+
+    print(f"[SYBIL-FAM-INFO] Family ID matrices saved successfully for context: '{context_label}'")
+    return df_daily_matrix if not df_daily_matrix.empty else None
+
+
+def calculate_sybil_family_id_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN FAMILY ID DISTRIBUTION ANALYSIS")
+    if df is None or df.empty:
+        print(f"[SYBIL-FAM-ERROR] Missing layout arrays for context '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_sybil_family_id_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating family metrics for specific service type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_sybil_family_id_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
 # MAIN
 if __name__ == "__main__":
     print("="*60)
@@ -778,6 +1153,38 @@ if __name__ == "__main__":
 
     if df_rot_track is not None:
         calculate_hrt_index_distributions(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING SYBIL IP PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_sybil_pattern_ip_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_sybil_pattern_ip_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_sybil_pattern_ip_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_sybil_pattern_ip_distributions(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING SYBIL FAMILY ID PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_sybil_family_id_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_sybil_family_id_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_sybil_family_id_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_sybil_family_id_distributions(df_rot_track, context_label="rotated_tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
