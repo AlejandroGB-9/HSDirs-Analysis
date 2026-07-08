@@ -450,6 +450,270 @@ def calculate_hrt_onion_to_hsdir_distribution(df, context_label):
                 
     return global_reporting_matrix
 
+
+# ANALYSIS 3: HRT INDEX DISTRIBUTIONS FOR ONION SERVICES AND HSDIRS (DAILY & WEEKLY VIEW)
+def compute_hrt_index_distributions(df_slice, context_label):
+    os.makedirs("analysis-results/hrt_index_distributions", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    has_onion_idx = "mapped_onion_index_100" in df_slice.columns #mapped_onion
+    has_rot_onion_idx = "last_known_onion_index_100" in df_slice.columns #last_known_onion
+    has_hsdir_idx = "hsdir_index_hrt_100" in df_slice.columns
+
+    if (not has_onion_idx or not has_rot_onion_idx) and not has_hsdir_idx :
+        print(f"[HRT-INDEX-ERROR] Neither onion's index nor HSDir's index found for {context_label}")
+        return None
+
+    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+    
+    for observation_day in unique_days_sorted:
+        day_data = df_slice[df_slice["date"] == observation_day].copy()
+        
+        hsdir_1st, hsdir_2nd, hsdir_3rd = 0, 0, 0
+        hsdir_1st_ratio, hsdir_2nd_ratio, hsdir_3rd_ratio = 0.0, 0.0, 0.0
+        total_unique_hsdirs = 0
+        
+        if has_hsdir_idx:
+            day_data["parsed_hsdir_idx"] = pd.to_numeric(day_data["hsdir_index_hrt_100"], errors='coerce')
+            valid_hsdir = day_data.dropna(subset=["parsed_hsdir_idx", "fingerprint"])
+            valid_hsdir = valid_hsdir[valid_hsdir["fingerprint"] != "None"]
+            unique_hsdirs = valid_hsdir.drop_duplicates(subset=["fingerprint"])
+            
+            total_unique_hsdirs = unique_hsdirs["fingerprint"].nunique()
+            if total_unique_hsdirs > 0:
+                hsdir_1st = unique_hsdirs[unique_hsdirs["parsed_hsdir_idx"] <= 33.33]["fingerprint"].nunique()
+                hsdir_2nd = unique_hsdirs[(unique_hsdirs["parsed_hsdir_idx"] > 33.33) & (unique_hsdirs["parsed_hsdir_idx"] <= 66.66)]["fingerprint"].nunique()
+                hsdir_3rd = unique_hsdirs[unique_hsdirs["parsed_hsdir_idx"] > 66.66]["fingerprint"].nunique()
+                
+                hsdir_1st_ratio = (hsdir_1st / total_unique_hsdirs * 100)
+                hsdir_2nd_ratio = (hsdir_2nd / total_unique_hsdirs * 100)
+                hsdir_3rd_ratio = (hsdir_3rd / total_unique_hsdirs * 100)
+
+        onion_1st, onion_2nd, onion_3rd = 0, 0, 0
+        onion_1st_ratio, onion_2nd_ratio, onion_3rd_ratio = 0.0, 0.0, 0.0
+        total_unique_onions = 0
+        
+        onion_col = "mapped_onion" if "mapped_onion" in day_data.columns else ("last_known_onion" if "last_known_onion" in day_data.columns else "fingerprint")
+        
+        if (has_onion_idx or has_rot_onion_idx) and onion_col in day_data.columns:
+            if has_onion_idx:
+                day_data["parsed_onion_idx"] = pd.to_numeric(day_data["mapped_onion_index_100"], errors='coerce')
+            else:
+                day_data["parsed_onion_idx"] = pd.to_numeric(day_data["last_known_onion_index_100"], errors='coerce')
+            valid_onion = day_data.dropna(subset=["parsed_onion_idx", onion_col])
+            valid_onion = valid_onion[valid_onion[onion_col] != "None"]
+            unique_onions = valid_onion.drop_duplicates(subset=[onion_col])
+            
+            total_unique_onions = unique_onions[onion_col].nunique()
+            if total_unique_onions > 0:
+                onion_1st = unique_onions[unique_onions["parsed_onion_idx"] <= 33.33][onion_col].nunique()
+                onion_2nd = unique_onions[(unique_onions["parsed_onion_idx"] > 33.33) & (unique_onions["parsed_onion_idx"] <= 66.66)][onion_col].nunique()
+                onion_3rd = unique_onions[unique_onions["parsed_onion_idx"] > 66.66][onion_col].nunique()
+                
+                onion_1st_ratio = (onion_1st / total_unique_onions * 100)
+                onion_2nd_ratio = (onion_2nd / total_unique_onions * 100)
+                onion_3rd_ratio = (onion_3rd / total_unique_onions * 100)
+
+        computed_metrics.append({
+            "Observation Date": observation_day,
+            "Total Unique HSDirs": total_unique_hsdirs,
+            "HSDir 1st tertile HRT Count": hsdir_1st,
+            "HSDir 1st tertile HRT Ratio (%)": round(hsdir_1st_ratio, 2),
+            "HSDir 2nd tertile HRT Count": hsdir_2nd,
+            "HSDir 2nd tertile HRT Ratio (%)": round(hsdir_2nd_ratio, 2),
+            "HSDir 3rd tertile HRT Count": hsdir_3rd,
+            "HSDir 3rd tertile HRT Ratio (%)": round(hsdir_3rd_ratio, 2),
+            "Total Unique Onions": total_unique_onions,
+            "Onion 1st tertile HRT Count": onion_1st,
+            "Onion 1st tertile HRT Ratio (%)": round(onion_1st_ratio, 2),
+            "Onion 2nd tertile HRT Count": onion_2nd,
+            "Onion 2nd tertile HRT Ratio (%)": round(onion_2nd_ratio, 2),
+            "Onion 3rd tertile HRT Count": onion_3rd,
+            "Onion 3rd tertile HRT Ratio (%)": round(onion_3rd_ratio, 2)
+        })
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[HRT-INDEX-WARNING] No data metrics generated for context: {context_label}")
+        return None
+            
+    if has_hsdir_idx and df_summary_matrix["Total Unique HSDirs"].sum() > 0:
+        plt.figure(figsize=(14, 6))
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='HSDir 1st Tertile (<=33.33%)')
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='HSDir 2nd Tertile (33.33-66.66%)')
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='HSDir 3rd Tertile (>66.66%)')
+        
+        for metric_col in ["HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count"]:
+            for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[metric_col]):
+                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+
+        plt.title(f"Tor v3 HSDir HRT Index Tertile Distribution ({context_label.replace('_', ' ').title()} - Daily)")
+        plt.xlabel("Observation Timeline")
+        plt.ylabel("Unique HSDir Count")
+        plt.xticks(rotation=45)
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_hsdir_index_daily_progression.png")
+        plt.close()
+    
+    if (has_onion_idx or has_rot_onion_idx) and df_summary_matrix["Total Unique Onions"].sum() > 0:
+        plt.figure(figsize=(14, 6))
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Onion 1st Tertile (<=33.33%)')
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Onion 2nd Tertile (33.33-66.66%)')
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Onion 3rd Tertile (>66.66%)')
+
+        for metric_col in ["Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
+            for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[metric_col]):
+                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+
+        plt.title(f"Tor v3 Onion Target HRT Index Tertile Distribution ({context_label.replace('_', ' ').title()} - Daily)")
+        plt.xlabel("Observation Timeline")
+        plt.ylabel("Unique Onion Target Count")
+        plt.xticks(rotation=45)
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_onion_index_daily_progression.png")
+        plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
+        "Total Unique HSDirs": "mean",
+        "HSDir 1st tertile HRT Count": "mean",
+        "HSDir 2nd tertile HRT Count": "mean",
+        "HSDir 3rd tertile HRT Count": "mean",
+        "Total Unique Onions": "mean",
+        "Onion 1st tertile HRT Count": "mean",
+        "Onion 2nd tertile HRT Count": "mean",
+        "Onion 3rd tertile HRT Count": "mean"
+    }).reset_index()
+    
+    df_weekly_matrix["HSDir 1st tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 1st tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
+    df_weekly_matrix["HSDir 2nd tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 2nd tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
+    df_weekly_matrix["HSDir 3rd tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 3rd tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
+    
+    df_weekly_matrix["Onion 1st tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 1st tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
+    df_weekly_matrix["Onion 2nd tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 2nd tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
+    df_weekly_matrix["Onion 3rd tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 3rd tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
+    
+    for col in ["Total Unique HSDirs", "HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count",
+                "Total Unique Onions", "Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
+        df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+        
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        
+        if has_hsdir_idx and df_weekly_matrix["Total Unique HSDirs"].sum() > 0:
+            plt.figure(figsize=(10, 6))
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Weekly Avg HSDir 1st Tertile')
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Weekly Avg HSDir 2nd Tertile')
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Weekly Avg HSDir 3rd Tertile')
+            
+            for metric_col in ["HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count"]:
+                for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[metric_col]):
+                    plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+            plt.title(f"Tor v3 Weekly Averaged HSDir HRT Index Distribution ({context_label.replace('_', ' ').title()})")
+            plt.xlabel("Observation Timeline (Weeks)")
+            plt.ylabel("Mean Identity Volume")
+            plt.legend(loc="upper right")
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_hsdir_index_weekly_progression.png")
+            plt.close()
+            
+        if (has_onion_idx or has_rot_onion_idx) and df_weekly_matrix["Total Unique Onions"].sum() > 0:
+            plt.figure(figsize=(10, 6))
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Weekly Avg Onion 1st Tertile')
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Weekly Avg Onion 2nd Tertile')
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Weekly Avg Onion 3rd Tertile')
+            
+            for metric_col in ["Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
+                for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[metric_col]):
+                    plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+            plt.title(f"Tor v3 Weekly Averaged Onion HRT Index Distribution ({context_label.replace('_', ' ').title()})")
+            plt.xlabel("Observation Timeline (Weeks)")
+            plt.ylabel("Mean Identity Volume")
+            plt.legend(loc="upper right")
+            plt.tight_layout()
+            plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_onion_index_weekly_progression.png")
+            plt.close()
+        
+        weekly_totals = {
+            "Observation Week": "Overall Weekly Average",
+            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
+            "HSDir 1st tertile HRT Count": round(df_weekly_matrix["HSDir 1st tertile HRT Count"].mean(), 2),
+            "HSDir 1st tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 1st tertile HRT Ratio (%)"].mean(), 2),
+            "HSDir 2nd tertile HRT Count": round(df_weekly_matrix["HSDir 2nd tertile HRT Count"].mean(), 2),
+            "HSDir 2nd tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 2nd tertile HRT Ratio (%)"].mean(), 2),
+            "HSDir 3rd tertile HRT Count": round(df_weekly_matrix["HSDir 3rd tertile HRT Count"].mean(), 2),
+            "HSDir 3rd tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 3rd tertile HRT Ratio (%)"].mean(), 2),
+            "Total Unique Onions": round(df_weekly_matrix["Total Unique Onions"].mean(), 2),
+            "Onion 1st tertile HRT Count": round(df_weekly_matrix["Onion 1st tertile HRT Count"].mean(), 2),
+            "Onion 1st tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 1st tertile HRT Ratio (%)"].mean(), 2),
+            "Onion 2nd tertile HRT Count": round(df_weekly_matrix["Onion 2nd tertile HRT Count"].mean(), 2),
+            "Onion 2nd tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 2nd tertile HRT Ratio (%)"].mean(), 2),
+            "Onion 3rd tertile HRT Count": round(df_weekly_matrix["Onion 3rd tertile HRT Count"].mean(), 2),
+            "Onion 3rd tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 3rd tertile HRT Ratio (%)"].mean(), 2)
+        }
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/hrt_index_distributions/{context_label}_hrt_index_weekly_matrix.csv", index=False)
+
+    daily_totals = {
+        "Observation Date": "Overall Average",
+        "Total Unique HSDirs": round(df_summary_matrix["Total Unique HSDirs"].mean(), 2),
+        "HSDir 1st tertile HRT Count": round(df_summary_matrix["HSDir 1st tertile HRT Count"].mean(), 2),
+        "HSDir 1st tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 1st tertile HRT Ratio (%)"].mean(), 2),
+        "HSDir 2nd tertile HRT Count": round(df_summary_matrix["HSDir 2nd tertile HRT Count"].mean(), 2),
+        "HSDir 2nd tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 2nd tertile HRT Ratio (%)"].mean(), 2),
+        "HSDir 3rd tertile HRT Count": round(df_summary_matrix["HSDir 3rd tertile HRT Count"].mean(), 2),
+        "HSDir 3rd tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 3rd tertile HRT Ratio (%)"].mean(), 2),
+        "Total Unique Onions": round(df_summary_matrix["Total Unique Onions"].mean(), 2),
+        "Onion 1st tertile HRT Count": round(df_summary_matrix["Onion 1st tertile HRT Count"].mean(), 2),
+        "Onion 1st tertile HRT Ratio (%)": round(df_summary_matrix["Onion 1st tertile HRT Ratio (%)"].mean(), 2),
+        "Onion 2nd tertile HRT Count": round(df_summary_matrix["Onion 2nd tertile HRT Count"].mean(), 2),
+        "Onion 2nd tertile HRT Ratio (%)": round(df_summary_matrix["Onion 2nd tertile HRT Ratio (%)"].mean(), 2),
+        "Onion 3rd tertile HRT Count": round(df_summary_matrix["Onion 3rd tertile HRT Count"].mean(), 2),
+        "Onion 3rd tertile HRT Ratio (%)": round(df_summary_matrix["Onion 3rd tertile HRT Ratio (%)"].mean(), 2)
+    }
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_summary_matrix_export.to_csv(f"analysis-results/hrt_index_distributions/{context_label}_hrt_index_daily_matrix.csv", index=False)
+    
+    print(f"[HRT-INDEX-INFO] Metric matrices saved successfully for context: '{context_label}'")
+    return df_summary_matrix
+
+
+def calculate_hrt_index_distributions(df, context_label):
+    print(f"=== PROCESSING {context_label.upper()} HRT INDEX TERTILE ANALYSIS ===")
+    if df is None or df.empty:
+        print(f"[HRT-INDEX-ERROR] Missing layout arrays for context '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_hrt_index_distributions(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating metrics for specific service type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_hrt_index_distributions(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
 # MAIN
 if __name__ == "__main__":
     print("="*60)
@@ -498,6 +762,22 @@ if __name__ == "__main__":
         
     if df_rot_track is not None:
         calculate_hrt_onion_to_hsdir_distribution(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING HRT INDEX TERTILE DISTRIBUTIONS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_hrt_index_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_hrt_index_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_hrt_index_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_hrt_index_distributions(df_rot_track, context_label="rotated_tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
