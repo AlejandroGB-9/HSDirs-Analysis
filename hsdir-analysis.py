@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 
 
+#  /$$   /$$  /$$$$$$  /$$$$$$$  /$$                                  
+# | $$  | $$ /$$__  $$| $$__  $$|__/                                  
+# | $$  | $$| $$  \__/| $$  \ $$ /$$  /$$$$$$                         
+# | $$$$$$$$|  $$$$$$ | $$  | $$| $$ /$$__  $$                        
+# | $$__  $$ \____  $$| $$  | $$| $$| $$  \__/                        
+# | $$  | $$ /$$  \ $$| $$  | $$| $$| $$                              
+# | $$  | $$|  $$$$$$/| $$$$$$$/| $$| $$                              
+# |__/  |__/ \______/ |_______/ |__/|__/                              
+                                                                    
+                                                                    
+                                                                    
+#   /$$$$$$                      /$$                     /$$          
+#  /$$__  $$                    | $$                    |__/          
+# | $$  \ $$ /$$$$$$$   /$$$$$$ | $$ /$$   /$$  /$$$$$$$ /$$  /$$$$$$$
+# | $$$$$$$$| $$__  $$ |____  $$| $$| $$  | $$ /$$_____/| $$ /$$_____/
+# | $$__  $$| $$  \ $$  /$$$$$$$| $$| $$  | $$|  $$$$$$ | $$|  $$$$$$ 
+# | $$  | $$| $$  | $$ /$$__  $$| $$| $$  | $$ \____  $$| $$ \____  $$
+# | $$  | $$| $$  | $$|  $$$$$$$| $$|  $$$$$$$ /$$$$$$$/| $$ /$$$$$$$/
+# |__/  |__/|__/  |__/ \_______/|__/ \____  $$|_______/ |__/|_______/ 
+#                                    /$$  | $$                        
+#                                   |  $$$$$$/                        
+#                                    \______/                         
+
+
 import os
 import json
 import math
@@ -1463,8 +1487,220 @@ def calculate_hsdir_uptime_distributions(df, context_label):
     return global_reporting_matrix
 
 
+# ANALYSIS 8: TRACKING DAILY AND WEEKLY UNIQUE HSDIR RECONNECTION PATTERNS (CHURN)
+def compute_churn_reconnect_distribution(df_slice, context_label):
+    os.makedirs("analysis-results/str_behave_status", exist_ok=True)
+    computed_daily_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if "hour" not in df_slice.columns or "fingerprint" not in df_slice.columns:
+        print(f"[CHURN-ERROR] Missing critical fields ('hour' or 'fingerprint') for label: {context_label}")
+        return None
+
+    df_working = df_slice.copy()
+    if df_working.empty:
+        print(f"[CHURN-WARNING] Empty data slice received for label: {context_label}")
+        return None
+    
+    if df_working["hour"].dtype == object or isinstance(df_working["hour"].iloc[0], str):
+        if df_working["hour"].str.contains(":").any():
+            hour_parts = df_working["hour"].str.split(":", expand=True)
+            df_working["hour_num"] = hour_parts[0].astype(int) + hour_parts[1].astype(int) / 60.0
+        else:
+            df_working["hour_num"] = pd.to_numeric(df_working["hour"], errors='coerce').fillna(0)
+    else:
+        df_working["hour_num"] = df_working["hour"].astype(float)
+        
+    df_working["DayNum"] = df_working["date"].apply(get_day_integer)
+    df_working["global_hour"] = (df_working["DayNum"] * 24) + df_working["hour_num"]
+    df_working["WeekIndex"] = df_working["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+
+    unique_days_sorted = sorted([d for d in df_working["date"].unique() if d not in ['', 'None']], key=get_day_integer)
+    
+    for observation_day in unique_days_sorted:
+        day_data = df_working[df_working["date"] == observation_day]
+        total_observed_fps = day_data["fingerprint"].nunique()
+        total_daily_reconnections = 0
+        
+        for fp in day_data["fingerprint"].unique():
+            df_fp = day_data[day_data["fingerprint"] == fp].sort_values(by="hour_num")
+            
+            reconnect_events = 0
+            state = None
+            
+            for _, row in df_fp.iterrows():
+                is_curr_active = row["status"] in ["ACTIVE_IN_RING", "None"] or pd.isna(row["status"])
+                
+                if state is None:
+                    state = "ACTIVE" if is_curr_active else "OFFLINE"
+                elif state == "ACTIVE" and not is_curr_active:
+                    state = "OFFLINE"
+                elif state == "OFFLINE" and is_curr_active:
+                    reconnect_events = 1
+                    state = "ACTIVE"
+            
+            total_daily_reconnections += reconnect_events
+            
+        reconnect_rate = (total_daily_reconnections / total_observed_fps * 100) if total_observed_fps > 0 else 0.0
+        computed_daily_metrics.append({
+            "Observation Date": observation_day,
+            "Total Unique HSDirs": total_observed_fps,
+            "Reconnecting Unique HSDirs": total_daily_reconnections,
+            "Daily Reconnection Rate (%)": round(reconnect_rate, 2)
+        })
+        
+    df_daily_churn = pd.DataFrame(computed_daily_metrics)
+
+    if df_daily_churn.empty:
+        print(f"[CHURN-ERROR] Summary matrix empty for context: {context_label}")
+        return None
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(df_daily_churn["Observation Date"], df_daily_churn["Reconnecting Unique HSDirs"], marker='o', color='purple', linewidth=2, label='Reconnecting HSDir Count')
+    for x, y in zip(df_daily_churn["Observation Date"], df_daily_churn["Reconnecting Unique HSDirs"]):
+        plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+        
+    plt.title(f"Tor v3 Unique HSDir Daily Reconnection Counts ({context_label.replace('_', ' ').title()})")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Relay Count (Total Reconnections)")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_daily_reconnect_count_churn.png")
+    plt.close()
+
+    weekly_unique_reconnects = {}
+    unique_weeks_sorted = sorted([w for w in df_working["WeekIndex"].unique() if w not in ['', 'None']])
+    
+    for observation_week in unique_weeks_sorted:
+        week_data = df_working[df_working["WeekIndex"] == observation_week]
+        reconnecting_fps_count = 0
+        
+        for fp in week_data["fingerprint"].unique():
+            df_fp = week_data[week_data["fingerprint"] == fp].sort_values(by="global_hour")
+            
+            reconnect_events = 0
+            state = None
+            
+            for _, row in df_fp.iterrows():
+                is_curr_active = row["status"] in ["ACTIVE_IN_RING", "None"] or pd.isna(row["status"])
+                
+                if state is None:
+                    state = "ACTIVE" if is_curr_active else "OFFLINE"
+                elif state == "ACTIVE" and not is_curr_active:
+                    state = "OFFLINE"
+                elif state == "OFFLINE" and is_curr_active:
+                    reconnect_events = 1
+                    state = "ACTIVE"
+
+            if reconnect_events >= 1:
+                reconnecting_fps_count += 1
+                
+        weekly_unique_reconnects[observation_week] = reconnecting_fps_count
+
+    df_weekly_prep = df_daily_churn.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_churn = df_weekly_prep.groupby("WeekIndex").agg({
+        "Total Unique HSDirs": "mean",
+        "Reconnecting Unique HSDirs": "mean",
+    }).reset_index()
+    
+    df_weekly_churn["Reconnecting Unique HSDirs Count"] = df_weekly_churn["WeekIndex"].map(weekly_unique_reconnects).fillna(0)
+    df_weekly_churn["Total Unique HSDirs"] = df_weekly_churn["Total Unique HSDirs"].round(2)
+    df_weekly_churn["Reconnecting Unique HSDirs"] = df_weekly_churn["Reconnecting Unique HSDirs"].round(2)
+    df_weekly_churn["Reconnecting Unique HSDirs Count"] = df_weekly_churn["Reconnecting Unique HSDirs Count"].round(2)
+    df_weekly_churn.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_churn.empty:
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs Count"], marker='s', color='teal', linewidth=2, label='Weekly Reconnecting Count')
+        for x, y in zip(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs Count"]):
+            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+        plt.title(f"Tor v3 Unique HSDir Weekly Reconnection Counts ({context_label.replace('_', ' ').title()})")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Relay Count (Unique Fingerprints)")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_count_churn.png")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs"], marker='s', color='teal', linewidth=2, label='Weekly Reconnecting Count')
+        for x, y in zip(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs"]):
+            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+        plt.title(f"Tor v3 Unique HSDir Weekly Reconnection Avg ({context_label.replace('_', ' ').title()})")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Relay Count (Unique Fingerprints)")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_progression_churn.png")
+        plt.close()
+
+    daily_totals = {"Observation Date": "Overall Average"}
+    for col in df_daily_churn.columns:
+        if col != "Observation Date":
+            daily_totals[col] = round(df_daily_churn[col].mean(), 2)
+    df_daily_export = pd.concat([df_daily_churn, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_daily_export.to_csv(f"analysis-results/str_behave_status/{context_label}_hsdir_daily_reconnect_matrix.csv", index=False)
+
+    if not df_weekly_churn.empty:
+        weekly_totals = {"Observation Week": "Overall Weekly Average"}
+        for col in df_weekly_churn.columns:
+            if col != "Observation Week":
+                weekly_totals[col] = round(df_weekly_churn[col].mean(), 2)
+        df_weekly_export = pd.concat([df_weekly_churn, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_export.to_csv(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_matrix.csv", index=False)
+
+    print(f"[CHURN-INFO] Churn and Reconnection matrices saved under context label: '{context_label}'")
+    return df_daily_churn
+
+
+def calculate_hsdir_reconnect_churn_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} CHURN-RECONNECT INTRA-WINDOW TRACKING ANALYSES")
+    if df is None or df.empty:
+        print(f"[CHURN-ERROR] Missing valid data slice matrix layouts for context '{context_label}'.")
+        return None
+        
+    global_churn_matrix = compute_churn_reconnect_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating churn patterns for hidden service identifier: {service}")
+            sub_pop = df[df["service_type"] == service]
+            if not sub_pop.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_churn_reconnect_distribution(sub_pop, segmented_label)
+                
+    return global_churn_matrix
+
+
 # MAIN
 if __name__ == "__main__":
+    print("=" * 60)
+    print("""
+  _   _ ____  ____  _         
+ | | | / ___||  _ \(_)_ __
+ | |_| \___ \| | | | | '__|
+ |  _  |___) | |_| | | |
+ |_| |_|____/|____/|_|_|
+     _                _           _
+    / \   _ __   __ _| |_   _ ___(_)___
+   / _ \ | '_ \ / _` | | | | / __| / __|
+  / ___ \| | | | (_| | | |_| \__ \ \__ \                              
+ /_/   \_\_| |_|\__,_|_|\__, |___/_|___/
+                        |___/
+    """)
     print("="*60)
     print("STARTING TOR V3 HSDIR DATA EXTRACTION AND PROCESSING")
     print("="*60)
@@ -1585,6 +1821,16 @@ if __name__ == "__main__":
         
     if df_track_consensus is not None:
         calculate_hsdir_uptime_distributions(df_track_consensus, context_label="tracked_targets")
+
+    print("="*60)
+    print("PROCESSING CHURN RECONNECTION DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+    
+    if df_net_consensus is not None:
+        calculate_hsdir_reconnect_churn_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_hsdir_reconnect_churn_distributions(df_track_consensus, context_label="tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
