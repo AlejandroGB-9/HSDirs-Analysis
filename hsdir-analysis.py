@@ -1685,6 +1685,174 @@ def calculate_hsdir_reconnect_churn_distributions(df, context_label):
     return global_churn_matrix
 
 
+# ANALYSIS 9: RARE-STRANGE HSDIR BEHAVIOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY VIEW)
+def compute_rare_hsdir_behaviour_distribution(df_slice, df_events, context_label):
+    os.makedirs("analysis-results/str_behave_ring_events", exist_ok=True)
+    computed_daily_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    def clear_hour_to_float(hour_str):
+        if pd.isna(hour_str) or not isinstance(hour_str, str) or ":" not in hour_str:
+            return 0.0
+        try:
+            parts = hour_str.split(":")
+            return int(parts[0]) + int(parts[1]) / 60.0
+        except Exception:
+            return 0.0
+
+    if df_slice.empty:
+        print(f"[RARE-WARNING] Empty snapshot data slice received for context: {context_label}")
+        return None
+
+    if df_events is None or df_events.empty:
+        df_rare_events = pd.DataFrame(columns=["date", "hour", "action", "reason", "fingerprint"])
+    else:
+        df_rare_events = df_events[(df_events["action"] == "FAILED") & (df_events["reason"] == "NOT_FOUND")].copy()
+
+    df_working_snapshots = df_slice.copy()
+    df_working_snapshots["hour_float"] = df_working_snapshots["hour"].apply(clear_hour_to_float)
+    df_rare_events["hour_float"] = df_rare_events["hour"].apply(clear_hour_to_float) if "hour" in df_rare_events.columns else 0.0
+
+    unique_days = [d for d in df_working_snapshots["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+    
+    for observation_day in unique_days_sorted:
+        day_snapshots = df_working_snapshots[df_working_snapshots["date"] == observation_day]
+        day_events = df_rare_events[df_rare_events["date"] == observation_day]
+        
+        total_unique_active_fps = day_snapshots[day_snapshots["status"] == "ACTIVE_IN_RING"]["fingerprint"].nunique()
+        
+        rare_fps_this_day = set()
+        
+        if not day_events.empty and not day_snapshots.empty:
+            snapshot_hours = np.array(sorted(day_snapshots["hour_float"].unique()))
+            
+            for _, event_row in day_events.iterrows():
+                ev_hour = event_row["hour_float"]
+                closest_snap_hour = snapshot_hours[np.argmin(np.abs(snapshot_hours - ev_hour))]
+                
+                hour_snapshots = day_snapshots[
+                    (day_snapshots["hour_float"] == closest_snap_hour) & 
+                    (day_snapshots["status"] == "ACTIVE_IN_RING")
+                ]
+                
+                if "fingerprint" in event_row and event_row["fingerprint"] != "None":
+                    matched_fps = hour_snapshots[hour_snapshots["fingerprint"] == event_row["fingerprint"]]["fingerprint"].unique()
+                    rare_fps_this_day.update(matched_fps)
+                else:
+                    rare_fps_this_day.update(hour_snapshots["fingerprint"].unique())
+        
+        active_fps_set = set(day_snapshots[day_snapshots["status"] == "ACTIVE_IN_RING"]["fingerprint"].unique())
+        rare_fps_this_day = rare_fps_this_day.intersection(active_fps_set)
+        
+        rare_count = len(rare_fps_this_day)
+        ratio_rare = (rare_count / total_unique_active_fps * 100) if total_unique_active_fps > 0 else 0.0
+        
+        computed_daily_metrics.append({
+            "Observation Date": observation_day,
+            "Total Unique HSDirs": total_unique_active_fps,
+            "Rare Behaviour Count": rare_count,
+            "Rare Behaviour Ratio (%)": round(ratio_rare, 2)
+        })
+
+    df_daily_matrix = pd.DataFrame(computed_daily_metrics)
+    if df_daily_matrix.empty:
+        print(f"[RARE-ERROR] Core metric matrix is empty for context: {context_label}")
+        return None
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(df_daily_matrix["Observation Date"], df_daily_matrix["Rare Behaviour Count"], marker='o', color='magenta', linewidth=2, label='Rare Behaviour HSDir Count')
+    
+    for x, y in zip(df_daily_matrix["Observation Date"], df_daily_matrix["Rare Behaviour Count"]):
+        plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+        
+    plt.title(f"Tor v3 Unique HSDirs with Rare Behavior Anomaly ({context_label.replace('_', ' ').title()} - Daily)")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Unique Relay Count (Fingerprints)")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_daily_progression.png")
+    plt.close()
+
+    df_weekly_prep = df_daily_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
+        "Total Unique HSDirs": "mean",
+        "Rare Behaviour Count": "mean"
+    }).reset_index()
+    
+    df_weekly_matrix["Rare Behaviour Ratio (%)"] = (df_weekly_matrix["Rare Behaviour Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
+    df_weekly_matrix["Total Unique HSDirs"] = df_weekly_matrix["Total Unique HSDirs"].round(2)
+    df_weekly_matrix["Rare Behaviour Count"] = df_weekly_matrix["Rare Behaviour Count"].round(2)
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Rare Behaviour Count"], marker='s', color='darkred', linewidth=2, label='Weekly Avg Rare Behavior HSDirs')
+        
+        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Rare Behaviour Count"]):
+            plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+            
+        plt.title(f"Tor v3 Weekly Averaged Rare Behavior HSDir Profile ({context_label.replace('_', ' ').title()})")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Mean Identity Instance Volume")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        plt.savefig(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_weekly_progression.png")
+        plt.close()
+
+    daily_totals = {
+        "Observation Date": "Overall Average",
+        "Total Unique HSDirs": round(df_daily_matrix["Total Unique HSDirs"].mean(), 2),
+        "Rare Behaviour Count": round(df_daily_matrix["Rare Behaviour Count"].mean(), 2),
+        "Rare Behaviour Ratio (%)": round(df_daily_matrix["Rare Behaviour Ratio (%)"].mean(), 2)
+    }
+    df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_daily_export.to_csv(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_daily_matrix.csv", index=False)
+
+    if not df_weekly_matrix.empty:
+        weekly_totals = {
+            "Observation Week": "Overall Weekly Average",
+            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
+            "Rare Behaviour Count": round(df_weekly_matrix["Rare Behaviour Count"].mean(), 2),
+            "Rare Behaviour Ratio (%)": round(df_weekly_matrix["Rare Behaviour Ratio (%)"].mean(), 2)
+        }
+        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_export.to_csv(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_weekly_matrix.csv", index=False)
+
+    print(f"[RARE-INFO] Behavior analysis matrices successfully written for context: '{context_label}'")
+    return df_daily_matrix
+
+
+def calculate_rare_tracked_hsdir_behaviour_distributions(df, df_events, context_label):
+    print(f"PROCESSING {context_label.upper()} RARE BEHAVIOR ANOMALIES")
+    if df is None or df.empty:
+        print(f"[RARE-ERROR] Missing input data layout for context '{context_label}'.")
+        return None
+        
+    global_reporting_matrix = compute_rare_hsdir_behaviour_distribution(df, df_events, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating strange validation failures for hidden service type: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_rare_hsdir_behaviour_distribution(sub_population_df, df_events, segmented_label)
+                
+    return global_reporting_matrix
+
+
 # MAIN
 if __name__ == "__main__":
     print("=" * 60)
@@ -1831,6 +1999,13 @@ if __name__ == "__main__":
         
     if df_track_consensus is not None:
         calculate_hsdir_reconnect_churn_distributions(df_track_consensus, context_label="tracked_targets")
+
+    print("="*60)
+    print("PROCESSING RARE-STRANGE TRACKED HSDIR BEHAVIOR DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+        
+    if df_track_consensus is not None:
+        calculate_rare_tracked_hsdir_behaviour_distributions(df_track_consensus, df_ring_events, context_label="tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
