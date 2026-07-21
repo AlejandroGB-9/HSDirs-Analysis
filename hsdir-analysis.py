@@ -1853,6 +1853,557 @@ def calculate_rare_tracked_hsdir_behaviour_distributions(df, df_events, context_
     return global_reporting_matrix
 
 
+# ANALYSIS 10: RING ACTION DISTRIBUTIONS (DAILY & WEEKLY RESOLUTIONS)
+def compute_ring_action_distribution(df_slice, context_label):
+    
+    os.makedirs("analysis-results/ring_action_distributions", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if "action" not in df_slice.columns:
+        print(f"[ACTIONS-ERROR] Required field 'action' missing for context: {context_label}")
+        return None
+
+    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+    
+    unique_actions = sorted([str(a) for a in df_slice["action"].unique() if a not in ['None', 'nan', '']])
+    if not unique_actions:
+        print(f"[ACTIONS-WARNING] No valid unique actions discovered for context: {context_label}")
+        return None
+
+    for observation_day in unique_days_sorted:
+        day_data = df_slice[df_slice["date"] == observation_day]
+        
+        row = {"Observation Date": observation_day}
+        total_day_actions = 0
+        for action in unique_actions:
+            count = len(day_data[day_data["action"] == action])
+            row[action] = count
+            total_day_actions += count
+        row["Total Actions"] = total_day_actions
+        computed_metrics.append(row)
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[ACTIONS-ERROR] Summary matrix empty for context: {context_label}")
+        return None
+        
+    plt.figure(figsize=(14, 6))
+    colors = sns.color_palette("tab10", len(unique_actions))
+    for idx, action in enumerate(unique_actions):
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix[action], 
+                 marker='o', linewidth=2, label=f'{action} Count', color=colors[idx])
+        for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[action]):
+            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+
+    plt.title(f"Tor v3 Ring Actions Distribution ({context_label.replace('_', ' ').title()} - Daily Baseline)")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Event Action Count")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    
+    daily_fig_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_daily_progression.png"
+    plt.savefig(daily_fig_name)
+    plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    agg_dict = {action: "mean" for action in unique_actions}
+    agg_dict["Total Actions"] = "mean"
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg(agg_dict).reset_index()
+    
+    for action in unique_actions:
+        df_weekly_matrix[action] = df_weekly_matrix[action].round(2)
+    df_weekly_matrix["Total Actions"] = df_weekly_matrix["Total Actions"].round(2)
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        for idx, action in enumerate(unique_actions):
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix[action], 
+                     marker='s', linewidth=2, label=f'Weekly Avg {action}', color=colors[idx])
+            for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[action]):
+                plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+                
+        plt.title(f"Tor v3 Weekly Averaged Ring Actions Profile ({context_label.replace('_', ' ').title()})")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Mean Event Action Volume")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        
+        weekly_fig_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_weekly_progression.png"
+        plt.savefig(weekly_fig_name)
+        plt.close()
+        
+        weekly_totals = {"Observation Week": "Overall Weekly Average"}
+        for action in unique_actions:
+            weekly_totals[action] = round(df_weekly_matrix[action].mean(), 2)
+        weekly_totals["Total Actions"] = round(df_weekly_matrix["Total Actions"].mean(), 2)
+        
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/ring_action_distributions/{context_label}_ring_actions_weekly_matrix.csv", index=False)
+
+    daily_totals = {"Observation Date": "Overall Average"}
+    for action in unique_actions:
+        daily_totals[action] = round(df_summary_matrix[action].mean(), 2)
+    daily_totals["Total Actions"] = round(df_summary_matrix["Total Actions"].mean(), 2)
+    
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    matrix_csv_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_daily_matrix.csv"
+    df_summary_matrix_export.to_csv(matrix_csv_name, index=False)
+    
+    print(f"[ACTIONS-INFO] Daily and weekly ring actions analysis saved for context: '{context_label}'")
+    return df_summary_matrix
+
+
+def calculate_ring_action_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} RING ACTION DISTRIBUTIONS")
+    if df is None or df.empty:
+        print(f"[ACTIONS-ERROR] Missing context dataframe arrays for layout: '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_ring_action_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating ring action metrics for service type subset: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_ring_action_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
+# ANALYSIS 11: RING ACTION FAILURE REASON DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
+def compute_ring_action_reason_distribution(df_slice, context_label):
+    
+    os.makedirs("analysis-results/ring_action_reasons", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if "action" not in df_slice.columns or "reason" not in df_slice.columns:
+        print(f"[REASONS-ERROR] Required columns ('action', 'reason') missing for context: {context_label}")
+        return None
+
+    df_failed = df_slice[df_slice["action"] == "FAILED"].copy()
+
+    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+    
+    unique_reasons = sorted([str(r) for r in df_failed["reason"].dropna().unique() if r not in ['None', 'nan', '']])
+    if not unique_reasons:
+        print(f"[REASONS-WARNING] No valid failure reasons discovered for context: {context_label}")
+        return None
+
+    for observation_day in unique_days_sorted:
+        day_data = df_failed[df_failed["date"] == observation_day]
+        
+        row = {"Observation Date": observation_day}
+        total_day_failures = 0
+        for reason in unique_reasons:
+            count = len(day_data[day_data["reason"] == reason])
+            row[reason] = count
+            total_day_failures += count
+        row["Total Failures"] = total_day_failures
+        computed_metrics.append(row)
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[REASONS-ERROR] Summary matrix empty for context: {context_label}")
+        return None
+        
+    plt.figure(figsize=(14, 6))
+    colors = sns.color_palette("Set2", len(unique_reasons))
+    for idx, reason in enumerate(unique_reasons):
+        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix[reason], 
+                 marker='o', linewidth=2, label=f'Reason: {reason}', color=colors[idx])
+        for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[reason]):
+            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+
+    plt.title(f"HSDir Failure Reasons Distribution ({context_label.replace('_', ' ').title()} - Daily)")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Anomalous Event Count")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    
+    daily_fig_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_daily.png"
+    plt.savefig(daily_fig_name)
+    plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    agg_dict = {reason: "sum" for reason in unique_reasons}
+    agg_dict["Total Failures"] = "sum"
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg(agg_dict).reset_index()
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        for idx, reason in enumerate(unique_reasons):
+            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix[reason], 
+                     marker='s', linewidth=2, label=f'Weekly {reason}', color=colors[idx])
+            for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[reason]):
+                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
+                
+        plt.title(f"HSDir Failure Reasons Distribution ({context_label.replace('_', ' ').title()} - Weekly Sum)")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Total Event Count")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        
+        weekly_fig_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_weekly.png"
+        plt.savefig(weekly_fig_name)
+        plt.close()
+        
+        weekly_totals = {"Observation Week": "Overall Total"}
+        for reason in unique_reasons:
+            weekly_totals[reason] = df_weekly_matrix[reason].sum()
+        weekly_totals["Total Failures"] = df_weekly_matrix["Total Failures"].sum()
+        
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/ring_action_reasons/{context_label}_action_reasons_weekly_matrix.csv", index=False)
+
+    daily_totals = {"Observation Date": "Overall Total"}
+    for reason in unique_reasons:
+        daily_totals[reason] = df_summary_matrix[reason].sum()
+    daily_totals["Total Failures"] = df_summary_matrix["Total Failures"].sum()
+    
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    matrix_csv_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_daily_matrix.csv"
+    df_summary_matrix_export.to_csv(matrix_csv_name, index=False)
+    
+    print(f"[REASONS-INFO] Analysis successfully completed for context: '{context_label}'")
+    return df_summary_matrix
+
+
+def calculate_ring_action_reason_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} RING ACTION REASON DISTRIBUTIONS")
+    if df is None or df.empty:
+        print(f"[REASONS-ERROR] Missing input dataframe layout for context: '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_ring_action_reason_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating ring failure reason metrics for service type subset: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_ring_action_reason_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
+# ANALYSIS 12: IP ENTITY OPERATOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
+def compute_ip_entity_operators_distribution(df_slice, context_label):
+    
+    os.makedirs("analysis-results/ip_operators", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    def extract_routing_prefixes(ip_str):
+        if not isinstance(ip_str, str) or '.' not in ip_str:
+            return None, None
+        octets = ip_str.strip().split('.')
+        if len(octets) >= 4:
+            prefix_16 = f"{octets[0]}.{octets[1]}.0.0/16"
+            prefix_24 = f"{octets[0]}.{octets[1]}.{octets[2]}.0/24"
+            return prefix_16, prefix_24
+        return None, None
+
+    # Check for the required IP address field
+    if "ip_address" not in df_slice.columns:
+        print(f"[IP-ERROR] Required column 'ip_address' missing for context: {context_label}")
+        return None
+
+    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+
+    for observation_day in unique_days_sorted:
+        day_data = df_slice[df_slice["date"] == observation_day].dropna(subset=["ip_address"])
+        
+        set_16_blocks = set()
+        set_24_blocks = set()
+        
+        for ip in day_data["ip_address"]:
+            p16, p24 = extract_routing_prefixes(ip)
+            if p16 and p24:
+                set_16_blocks.add(p16)
+                set_24_blocks.add(p24)
+                
+        computed_metrics.append({
+            "Observation Date": observation_day,
+            "Unique /16 IP Blocks": len(set_16_blocks),
+            "Unique /24 IP Blocks": len(set_24_blocks)
+        })
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[IP-ERROR] Generated empty operator matrix for context: {context_label}")
+        return None
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique /16 IP Blocks"], 
+             marker='o', linewidth=2, label='Unique /16 Network Blocks', color='#1f77b4')
+    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique /24 IP Blocks"], 
+             marker='s', linewidth=2, label='Unique /24 Subnet Blocks', color='#ff7f0e')
+    
+    for x, y1, y2 in zip(df_summary_matrix["Observation Date"], 
+                         df_summary_matrix["Unique /16 IP Blocks"], 
+                         df_summary_matrix["Unique /24 IP Blocks"]):
+        plt.annotate(f"{int(y1)}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#1f77b4')
+        plt.annotate(f"{int(y2)}", (x, y2), textcoords="offset points", xytext=(0, -14), ha='center', fontsize=9, color='#ff7f0e')
+
+    plt.title(f"HSDir IP Operator Footprint Distribution ({context_label.replace('_', ' ').title()} - Daily)")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Unique Autonomous Routing Prefixes")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    
+    plt.savefig(f"analysis-results/ip_operators/{context_label}_ip_operators_daily.png")
+    plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
+        "Unique /16 IP Blocks": "mean",
+        "Unique /24 IP Blocks": "mean"
+    }).reset_index()
+    
+    df_weekly_matrix["Unique /16 IP Blocks"] = df_weekly_matrix["Unique /16 IP Blocks"].round(2)
+    df_weekly_matrix["Unique /24 IP Blocks"] = df_weekly_matrix["Unique /24 IP Blocks"].round(2)
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique /16 IP Blocks"], 
+                 marker='o', linewidth=2, label='Mean Weekly /16 Blocks', color='#2ca02c')
+        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique /24 IP Blocks"], 
+                 marker='s', linewidth=2, label='Mean Weekly /24 Blocks', color='#d62728')
+        
+        for x, y1, y2 in zip(df_weekly_matrix["Observation Week"], 
+                             df_weekly_matrix["Unique /16 IP Blocks"], 
+                             df_weekly_matrix["Unique /24 IP Blocks"]):
+            plt.annotate(f"{y1}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#2ca02c')
+            plt.annotate(f"{y2}", (x, y2), textcoords="offset points", xytext=(0, -14), ha='center', fontsize=9, color='#d62728')
+            
+        plt.title(f"HSDir IP Operator Footprint Distribution ({context_label.replace('_', ' ').title()} - Weekly Mean)")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Mean Distinct Network Volume")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        
+        plt.savefig(f"analysis-results/ip_operators/{context_label}_ip_operators_weekly.png")
+        plt.close()
+        
+        weekly_totals = {
+            "Observation Week": "Overall Mean",
+            "Unique /16 IP Blocks": round(df_weekly_matrix["Unique /16 IP Blocks"].mean(), 2),
+            "Unique /24 IP Blocks": round(df_weekly_matrix["Unique /24 IP Blocks"].mean(), 2)
+        }
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/ip_operators/{context_label}_ip_operators_weekly_matrix.csv", index=False)
+
+    daily_totals = {
+        "Observation Date": "Overall Mean",
+        "Unique /16 IP Blocks": round(df_summary_matrix["Unique /16 IP Blocks"].mean(), 2),
+        "Unique /24 IP Blocks": round(df_summary_matrix["Unique /24 IP Blocks"].mean(), 2)
+    }
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_summary_matrix_export.to_csv(f"analysis-results/ip_operators/{context_label}_ip_operators_daily_matrix.csv", index=False)
+    
+    print(f"[IP-INFO] Completed unique operator network distribution logs for context: '{context_label}'")
+    return df_summary_matrix
+
+
+def calculate_ip_entity_operators_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} IP OPERATOR DISTRIBUTION")
+    if df is None or df.empty:
+        print(f"[IP-ERROR] Provided dataframe array is missing or empty for context: '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_ip_entity_operators_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Segmenting routing topologies for service subset: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_ip_entity_operators_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
+# ANALYSIS 13: FAMILY ID ENTITY OPERATOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
+def compute_family_id_entity_operators_distribution(df_slice, context_label):
+    
+    os.makedirs("analysis-results/family_operators", exist_ok=True)
+    computed_metrics = []
+    
+    def get_day_integer(day_str):
+        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
+            return int(day_str.split()[1])
+        return 0
+
+    if "declared_family_id" not in df_slice.columns:
+        print(f"[FAMILY-ERROR] Required column 'declared_family_id' missing for context: {context_label}")
+        return None
+
+    df_valid = df_slice.copy()
+    df_valid["declared_family_id"] = df_valid["declared_family_id"].astype(str).str.strip()
+    
+    invalid_tokens = ['none', 'nan', '', '[]', 'empty', 'unknown', 'false']
+    df_valid = df_valid[~df_valid["declared_family_id"].str.lower().isin(invalid_tokens)]
+
+    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
+    unique_days_sorted = sorted(unique_days, key=get_day_integer)
+
+    for observation_day in unique_days_sorted:
+        day_global = df_slice[df_slice["date"] == observation_day]
+        day_families = df_valid[df_valid["date"] == observation_day]
+        
+        unique_families_count = day_families["declared_family_id"].nunique()
+        total_nodes_in_families = len(day_families)
+        
+
+        computed_metrics.append({
+            "Observation Date": observation_day,
+            "Unique Declared Families": unique_families_count,
+            "Nodes within Families": total_nodes_in_families
+        })
+
+    df_summary_matrix = pd.DataFrame(computed_metrics)
+    if df_summary_matrix.empty:
+        print(f"[FAMILY-ERROR] Generated empty family matrix array for context: {context_label}")
+        return None
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique Declared Families"], 
+             marker='o', linewidth=2, label='Unique Declared Operator Families', color='#8884d8')
+    
+    for x, y1 in zip(df_summary_matrix["Observation Date"], 
+                         df_summary_matrix["Unique Declared Families"]):
+        plt.annotate(f"{int(y1)}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#8884d8')
+
+    plt.title(f"HSDir Declared Family ID Distribution ({context_label.replace('_', ' ').title()} - Daily)")
+    plt.xlabel("Observation Timeline")
+    plt.ylabel("Distinct Entity / Node Count")
+    plt.xticks(rotation=45)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    
+    plt.savefig(f"analysis-results/family_operators/{context_label}_family_operators_daily.png")
+    plt.close()
+
+    df_weekly_prep = df_summary_matrix.copy()
+    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
+    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
+    
+    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
+        "Unique Declared Families": "mean",
+        "Nodes within Families": "mean"
+    }).reset_index()
+    
+    for col in ["Unique Declared Families", "Nodes within Families"]:
+        df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
+    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+
+    if not df_weekly_matrix.empty:
+        plt.figure(figsize=(10, 6))
+        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique Declared Families"], 
+                 marker='s', linewidth=2, label='Mean Active Families', color='#413ea0')
+        
+        for x, y1 in zip(df_weekly_matrix["Observation Week"], 
+                             df_weekly_matrix["Unique Declared Families"]):
+            plt.annotate(f"{y1}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#413ea0')
+            
+        plt.title(f"HSDir Declared Family ID Distribution ({context_label.replace('_', ' ').title()} - Weekly Mean)")
+        plt.xlabel("Observation Timeline (Weeks)")
+        plt.ylabel("Mean Entity Densities")
+        plt.legend(loc="upper right")
+        plt.tight_layout()
+        
+        plt.savefig(f"analysis-results/family_operators/{context_label}_family_operators_weekly.png")
+        plt.close()
+        
+        weekly_totals = {
+            "Observation Week": "Overall Mean",
+            "Unique Declared Families": round(df_weekly_matrix["Unique Declared Families"].mean(), 2),
+            "Nodes within Families": round(df_weekly_matrix["Nodes within Families"].mean(), 2)
+        }
+        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
+        df_weekly_matrix_export.to_csv(f"analysis-results/family_operators/{context_label}_family_operators_weekly_matrix.csv", index=False)
+
+    daily_totals = {
+        "Observation Date": "Overall Mean",
+        "Unique Declared Families": round(df_summary_matrix["Unique Declared Families"].mean(), 2),
+        "Nodes within Families": round(df_summary_matrix["Nodes within Families"].mean(), 2)
+    }
+    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
+    df_summary_matrix_export.to_csv(f"analysis-results/family_operators/{context_label}_family_operators_daily_matrix.csv", index=False)
+    
+    print(f"[FAMILY-INFO] Analysis successfully completed for context: '{context_label}'")
+    return df_summary_matrix
+
+
+def calculate_family_id_entity_operators_distributions(df, context_label):
+    print(f"PROCESSING {context_label.upper()} FAMILY ID OPERATOR DISTRIBUTIONS")
+    if df is None or df.empty:
+        print(f"[FAMILY-ERROR] Missing input dataframe layout for context: '{context_label}'.")
+        return None
+    
+    global_reporting_matrix = compute_family_id_entity_operators_distribution(df, context_label)
+    
+    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
+        unique_services = df["service_type"].dropna().unique()
+        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
+        
+        for service in unique_services:
+            print(f"    --> Isolating cryptographic family metrics for service type subset: {service}")
+            sub_population_df = df[df["service_type"] == service]
+            if not sub_population_df.empty:
+                segmented_label = f"{context_label}_{str(service).lower()}"
+                compute_family_id_entity_operators_distribution(sub_population_df, segmented_label)
+                
+    return global_reporting_matrix
+
+
 # MAIN
 if __name__ == "__main__":
     print("=" * 60)
@@ -2006,6 +2557,52 @@ if __name__ == "__main__":
         
     if df_track_consensus is not None:
         calculate_rare_tracked_hsdir_behaviour_distributions(df_track_consensus, df_ring_events, context_label="tracked_targets")
+
+    print("="*60)
+    print("PROCESSING RING ACTION DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+        
+    if df_track_consensus is not None:
+        calculate_ring_action_distributions(df_ring_events, context_label="tracked_targets")
+
+    print("="*60)
+    print("PROCESSING RING ACTION REASON DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+        
+    if df_track_consensus is not None:
+        calculate_ring_action_reason_distributions(df_ring_events, context_label="tracked_targets")
+
+    print("="*60)
+    print("PROCESSING IP OPERATOR DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+        
+    if df_net_consensus is not None:
+        calculate_ip_entity_operators_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_ip_entity_operators_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_ip_entity_operators_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_ip_entity_operators_distributions(df_rot_track, context_label="rotated_tracked_targets")
+
+    print("="*60)
+    print("PROCESSING FAMILY ID OPERATOR DISTRIBUTIONS ANALYSIS")
+    print("="*60)
+        
+    if df_net_consensus is not None:
+        calculate_family_id_entity_operators_distributions(df_net_consensus, context_label="network_wide")
+        
+    if df_track_consensus is not None:
+        calculate_family_id_entity_operators_distributions(df_track_consensus, context_label="tracked_targets")
+
+    if df_rot_net is not None:
+        calculate_family_id_entity_operators_distributions(df_rot_net, context_label="rotated_network_wide")
+
+    if df_rot_track is not None:
+        calculate_family_id_entity_operators_distributions(df_rot_track, context_label="rotated_tracked_targets")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
