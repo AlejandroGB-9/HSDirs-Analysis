@@ -22,30 +22,24 @@
 # |__/  |__/|__/  |__/ \_______/|__/ \____  $$|_______/ |__/|_______/ 
 #                                    /$$  | $$                        
 #                                   |  $$$$$$/                        
-#                                    \______/                         
-
+#
 
 import os
+import ast
 import json
-import math
+import ipaddress
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-# ENVIRONMENT SETUP & GLOBAL CONFIGURATION
-sns.set_theme(style="whitegrid")
-plt.rcParams.update({
-    'figure.figsize': (12, 6),
-    'axes.labelsize': 12,
-    'axes.titlesize': 14,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'figure.titlesize': 16,
-    'savefig.dpi': 300,
-    'savefig.bbox': 'tight'
-})
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+import matplotlib.colors as mcolors
+import matplotlib.ticker as mticker
+from scipy.stats import kstest
+from scipy.cluster.hierarchy import linkage, leaves_list
+from scipy.spatial.distance import squareform
 
 target_files = [
     "network_hsdir_consensus_snapshots.jsonl",
@@ -55,7 +49,6 @@ target_files = [
     "rotated_tracked_hsdir_consensus_snapshots.jsonl"
 ]
 
-# INGESTION AND CLEANSING
 def extract_telemetry(target_filename):
     output_csv = target_filename.replace('.jsonl', '.csv')
     print(f"[EXTRACT-INFO] Ingesting log from source stream: {target_filename}")
@@ -103,15 +96,6 @@ def extract_telemetry(target_filename):
         
     if "or_port" in df_processed.columns:
         df_processed.drop(columns=["or_port"], inplace=True, errors='ignore')
-        
-    for technical_flag in ["Fast", "HSDir", "Stable", "Valid"]:
-        if "flags" in df_processed.columns:
-            df_processed[technical_flag] = df_processed["flags"].apply(lambda val: 1 if (isinstance(val, list) and technical_flag in val) or (isinstance(val, str) and technical_flag in val) else 0)
-        else:
-            df_processed[technical_flag] = 0
-            
-    if "flags" in df_processed.columns:
-        df_processed.drop(columns=["flags"], inplace=True, errors='ignore')
 
     if "declared_family_id" in df_processed.columns:
         df_processed["declared_family_id"] = df_processed["declared_family_id"].astype(str).replace(['nan', 'NaN', 'None', '0', '0.0', '', ' '], 'None')
@@ -119,32 +103,41 @@ def extract_telemetry(target_filename):
     else:
         df_processed["declared_family_id"] = 'None'
 
-    if "declared_family" in df_processed.columns:
-        def clean_initial_family(val):
-            if isinstance(val, (list, tuple, np.ndarray)):
-                return list(val)
-                
-            if pd.isna(val) or val is None or val in ['None', 'nan', 'NaN', '[]', '', ' ']:
-                return []
-                
-            if isinstance(val, str):
-                val_stripped = val.strip()
-                if val_stripped.startswith('[') and val_stripped.endswith(']'):
-                    try:
-                        parsed = ast.literal_eval(val_stripped)
-                        if isinstance(parsed, list):
-                            return parsed
-                    except Exception:
-                        pass
-                return [val_stripped]
+    # List-valued fields that must be stored/reloaded as real Python lists,
+    # not stringified. declared_family and flags share identical handling:
+    # parse to a list here, skip the generic astype(str) pass below, and get
+    # reconstructed from CSV by the matching block in validate_sort_data.
+    def clean_initial_family(val):
+        if isinstance(val, (list, tuple, np.ndarray)):
+            return list(val)
+
+        if pd.isna(val) or val is None or val in ['None', 'nan', 'NaN', '[]', '', ' ']:
             return []
-            
-        df_processed["declared_family"] = df_processed["declared_family"].apply(clean_initial_family)
-    else:
-        df_processed["declared_family"] = [[] for _ in range(len(df_processed))]
-        
+
+        if isinstance(val, str):
+            val_stripped = val.strip()
+            if val_stripped.startswith('[') and val_stripped.endswith(']'):
+                try:
+                    parsed = ast.literal_eval(val_stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+                return [val_stripped]
+            return [val_stripped]
+        return []
+
+    _LIST_VALUED_COLUMNS = ("declared_family", "flags")
+    for _list_col in _LIST_VALUED_COLUMNS:
+        if _list_col in df_processed.columns:
+            df_processed[_list_col] = df_processed[_list_col].apply(clean_initial_family)
+        elif _list_col == "declared_family":
+            # declared_family is guaranteed downstream; flags is only created
+            # if the source had it (consensus data), never fabricated empty.
+            df_processed[_list_col] = [[] for _ in range(len(df_processed))]
+
     for col in df_processed.columns:
-        if col == "declared_family":
+        if col in _LIST_VALUED_COLUMNS:
             continue
         if df_processed[col].dtype == 'object':
             df_processed[col] = df_processed[col].astype(str).replace(['nan', '0', '0.0', '', ' '], 'None')
@@ -157,8 +150,6 @@ def extract_telemetry(target_filename):
     print(f"    --> Normalized and written to disk: {output_csv} [Rows: {len(df_processed)}]")
     return True
 
-
-# VERIFICATION, VALIDATION, CHRONOLOGICAL SORT AND DAY ARRANGEMENT
 def validate_sort_data(csv_path):
     if not os.path.exists(csv_path):
         print(f"[VERIFY-ERROR] Target file unavailable: {csv_path}")
@@ -171,26 +162,33 @@ def validate_sort_data(csv_path):
             df[col] = df[col].fillna('None').astype(str)
             df[col] = df[col].replace(['nan', 'NaN', 'None', ''], 'None')
             
-    if "declared_family" in df.columns:
-        def parse_csv_family_list(val):
-            if isinstance(val, (list, tuple, np.ndarray)):
-                return list(val)
-            if pd.isna(val) or val is None:
-                return []
-            val_str = str(val).strip()
-            if val_str in ['None', 'nan', 'NaN', '', '[]']:
-                return []
-            if val_str.startswith('[') and val_str.endswith(']'):
-                try:
-                    parsed = ast.literal_eval(val_str)
-                    if isinstance(parsed, list):
-                        return parsed
-                except Exception:
-                    pass
-            return [val_str]
-        df["declared_family"] = df["declared_family"].apply(parse_csv_family_list)
-    else:
-        df["declared_family"] = [[] for _ in range(len(df))]
+    def parse_csv_family_list(val):
+        if isinstance(val, (list, tuple, np.ndarray)):
+            return list(val)
+        if pd.isna(val) or val is None:
+            return []
+        val_str = str(val).strip()
+        if val_str in ['None', 'nan', 'NaN', '', '[]']:
+            return []
+        if val_str.startswith('[') and val_str.endswith(']'):
+            try:
+                parsed = ast.literal_eval(val_str)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                pass
+        return [val_str]
+
+    # Reconstruct the same list-valued columns extract_telemetry parsed
+    # (declared_family, flags) back into real lists after the CSV round-trip.
+    for _list_col in ("declared_family", "flags"):
+        if _list_col in df.columns:
+            df[_list_col] = df[_list_col].apply(parse_csv_family_list)
+        elif _list_col == "declared_family":
+            df[_list_col] = [[] for _ in range(len(df))]
+
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.sort_values('timestamp').reset_index(drop=True)
     
     sort_columns = []
     if "date" in df.columns:
@@ -215,2196 +213,4202 @@ def validate_sort_data(csv_path):
     return df
 
 
-# ANALYSIS 1: NET-WIDE AND TRACKED (+ ROATED) STABILITY ANALYSIS (DAILY & WEEKLY VIEW)
-def compute_stability(df_slice, context_label):
-    os.makedirs("analysis-results/stability", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_data = df_slice[df_slice["date"] == observation_day]
-        total_unique_identities = day_data["fingerprint"].nunique()
-        
-        offline_indicators = (day_data["status"] != "ACTIVE_IN_RING") | \
-                             (day_data.get("consecutive_hourly_absences", pd.Series(0, index=day_data.index)) > 0)
-        total_offline_identities = day_data[offline_indicators]["fingerprint"].nunique()
-        
-        total_active_identities = total_unique_identities - total_offline_identities
-        
-        ratio_active = (total_active_identities / total_unique_identities * 100) if total_unique_identities > 0 else 0
-        ratio_offline = 100.0 - ratio_active
-        
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Total Unique HSDirs": total_unique_identities,
-            "Active Directories": total_active_identities,
-            "Active Ratio (%)": round(ratio_active, 2),
-            "Offline Attrition": total_offline_identities,
-            "Offline Ratio (%)": round(ratio_offline, 2)
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[STABILITY-ERROR] Summary matrix empty for context: {context_label}")
-        return None
-        
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Active Directories"], marker='o', color='green', linewidth=2, label='Active HSDirs Count')
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Offline Attrition"], marker='o', color='red', linewidth=2, label='Offline HSDirs Count')
-
-    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Active Directories"]):
-        plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Offline Attrition"]):
-        plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-    plt.title(f"Tor v3 Active HSDirs vs Attrition Churn ({context_label.replace('_', ' ').title()} - Daily Baseline)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Unique Fingerprint Directory Count")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    daily_fig_name = f"analysis-results/stability/{context_label}_hsdir_daily_stability_progression.png"
-    plt.savefig(daily_fig_name)
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total Unique HSDirs": "mean",
-        "Active Directories": "mean",
-        "Offline Attrition": "mean"
-    }).reset_index()
-    
-    df_weekly_matrix["Active Ratio (%)"] = (df_weekly_matrix["Active Directories"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["Offline Ratio (%)"] = (100.0 - df_weekly_matrix["Active Ratio (%)"]).round(2)
-    
-    df_weekly_matrix["Total Unique HSDirs"] = df_weekly_matrix["Total Unique HSDirs"].round(2)
-    df_weekly_matrix["Active Directories"] = df_weekly_matrix["Active Directories"].round(2)
-    df_weekly_matrix["Offline Attrition"] = df_weekly_matrix["Offline Attrition"].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Active Directories"], marker='s', color='blue', linewidth=2, label='Weekly Avg Active HSDirs')
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Offline Attrition"], marker='d', color='orange', linewidth=2, label='Weekly Avg Offline Attrition')
-        
-        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Active Directories"]):
-            plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Offline Attrition"]):
-            plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-        plt.title(f"Tor v3 Weekly Averaged HSDir Stability Profile ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Identity Instance Volume")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        weekly_fig_name = f"analysis-results/stability/{context_label}_hsdir_weekly_stability_progression.png"
-        plt.savefig(weekly_fig_name)
-        plt.close()
-        
-        weekly_totals = {
-            "Observation Week": "Overall Weekly Average",
-            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
-            "Active Directories": round(df_weekly_matrix["Active Directories"].mean(), 2),
-            "Active Ratio (%)": round(df_weekly_matrix["Active Ratio (%)"].mean(), 2),
-            "Offline Attrition": round(df_weekly_matrix["Offline Attrition"].mean(), 2),
-            "Offline Ratio (%)": round(df_weekly_matrix["Offline Ratio (%)"].mean(), 2)
-        }
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/stability/{context_label}_hsdir_weekly_stability_matrix.csv", index=False)
-
-    daily_totals = {
-        "Observation Date": "Overall Average",
-        "Total Unique HSDirs": round(df_summary_matrix["Total Unique HSDirs"].mean(), 2),
-        "Active Directories": round(df_summary_matrix["Active Directories"].mean(), 2),
-        "Active Ratio (%)": round(df_summary_matrix["Active Ratio (%)"].mean(), 2),
-        "Offline Attrition": round(df_summary_matrix["Offline Attrition"].mean(), 2),
-        "Offline Ratio (%)": round(df_summary_matrix["Offline Ratio (%)"].mean(), 2)
-    }
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    matrix_csv_name = f"analysis-results/stability/{context_label}_hsdir_daily_stability_matrix.csv"
-    df_summary_matrix_export.to_csv(matrix_csv_name, index=False)
-    
-    print(f"[STABILITY-INFO] Daily and weekly analysis saved for context: '{context_label}'")
-    return df_summary_matrix
-
-
-def calculate_stability_matrices(df, context_label):
-    print(f"=== PROCESSING {context_label.upper()} CONSENSUS RESILIENCE ===")
-    if df is None or df.empty:
-        print(f"[STABILITY-ERROR] Missing data for context '{context_label}'.")
-        return None
-    
-    # 1. Run core baseline execution logic across complete contextual layout
-    global_reporting_matrix = compute_stability(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating target tracking metrics for service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_stability(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 2: TRACKED (+ ROATED) HRT DISTANCE BETWEEN ONION-TO-HSDIR ANALYSIS (DAILY & WEEKLY VIEW)
-def compute_hrt_onion_to_hsdir(df_slice, context_label):
-    os.makedirs("analysis-results/hrt_onion_to_hsdir", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if "hsdir_to_onion_ring_position" not in df_slice.columns:
-        print(f"[HRT-ERROR] Field 'hsdir_to_onion_ring_position' missing for context {context_label}")
-        return None
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_data = df_slice[df_slice["date"] == observation_day].copy()
-        
-        day_data["parsed_position"] = pd.to_numeric(day_data["hsdir_to_onion_ring_position"], errors='coerce')
-        
-        valid_data = day_data.dropna(subset=["parsed_position", "fingerprint"])
-        valid_data = valid_data[valid_data["fingerprint"] != "None"]
-        
-        unique_nodes = valid_data.drop_duplicates(subset=["fingerprint"]).copy()
-        
-        total_unique_identities = unique_nodes["fingerprint"].nunique()
-        if total_unique_identities == 0:
-            continue
-            
-        close_count = unique_nodes[unique_nodes["parsed_position"] <= 33.33]["fingerprint"].nunique()
-        separate_count = unique_nodes[(unique_nodes["parsed_position"] > 33.33) & (unique_nodes["parsed_position"] <= 66.66)]["fingerprint"].nunique()
-        far_count = unique_nodes[unique_nodes["parsed_position"] > 66.66]["fingerprint"].nunique()
-        
-        ratio_close = (close_count / total_unique_identities * 100)
-        ratio_separate = (separate_count / total_unique_identities * 100)
-        ratio_far = (far_count / total_unique_identities * 100)
-        
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Total Unique HSDirs": total_unique_identities,
-            "Close Count": close_count,
-            "Close Ratio (%)": round(ratio_close, 2),
-            "Separate Count": separate_count,
-            "Separate Ratio (%)": round(ratio_separate, 2),
-            "Far Count": far_count,
-            "Far Ratio (%)": round(ratio_far, 2)
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[HRT-WARNING] No valid unique-identity quadrant metrics for context: {context_label}")
-        return None
-        
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Close Count"], marker='o', color='green', linewidth=2, label='Close (<=33.33%)')
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Separate Count"], marker='s', color='blue', linewidth=2, label='Separate (33.33% - 66.66%)')
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Far Count"], marker='d', color='red', linewidth=2, label='Far (>66.66%)')
-
-    for metric_col in ["Close Count", "Separate Count", "Far Count"]:
-        for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[metric_col]):
-            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-    plt.title(f"Tor v3 Unique HSDir Position Quadrant Drift ({context_label.replace('_', ' ').title()} - Daily)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Unique Fingerprint Directory Count")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    plt.savefig(f"analysis-results/hrt_onion_to_hsdir/{context_label}_hrt_daily_progression.png")
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total Unique HSDirs": "mean",
-        "Close Count": "mean",
-        "Separate Count": "mean",
-        "Far Count": "mean"
-    }).reset_index()
-    
-    df_weekly_matrix["Close Ratio (%)"] = (df_weekly_matrix["Close Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["Separate Ratio (%)"] = (df_weekly_matrix["Separate Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["Far Ratio (%)"] = (df_weekly_matrix["Far Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    
-    df_weekly_matrix["Total Unique HSDirs"] = df_weekly_matrix["Total Unique HSDirs"].round(2)
-    df_weekly_matrix["Close Count"] = df_weekly_matrix["Close Count"].round(2)
-    df_weekly_matrix["Separate Count"] = df_weekly_matrix["Separate Count"].round(2)
-    df_weekly_matrix["Far Count"] = df_weekly_matrix["Far Count"].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Close Count"], marker='o', color='green', linewidth=2, label='Weekly Close Avg')
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Separate Count"], marker='s', color='blue', linewidth=2, label='Weekly Separate Avg')
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Far Count"], marker='d', color='red', linewidth=2, label='Weekly Far Avg')
-        
-        for metric_col in ["Close Count", "Separate Count", "Far Count"]:
-            for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[metric_col]):
-                plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-                
-        plt.title(f"Tor v3 Weekly HRT Topology Profile ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Unique Identity Quadrant Footprint")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        plt.savefig(f"analysis-results/hrt_onion_to_hsdir/{context_label}_hrt_weekly_progression.png")
-        plt.close()
-        
-        weekly_totals = {
-            "Observation Week": "Overall Weekly Average",
-            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
-            "Close Count": round(df_weekly_matrix["Close Count"].mean(), 2),
-            "Close Ratio (%)": round(df_weekly_matrix["Close Ratio (%)"].mean(), 2),
-            "Separate Count": round(df_weekly_matrix["Separate Count"].mean(), 2),
-            "Separate Ratio (%)": round(df_weekly_matrix["Separate Ratio (%)"].mean(), 2),
-            "Far Count": round(df_weekly_matrix["Far Count"].mean(), 2),
-            "Far Ratio (%)": round(df_weekly_matrix["Far Ratio (%)"].mean(), 2)
-        }
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/hrt_onion_to_hsdir/{context_label}_hrt_weekly_matrix.csv", index=False)
-
-    daily_totals = {
-        "Observation Date": "Overall Average",
-        "Total Unique HSDirs": round(df_summary_matrix["Total Unique HSDirs"].mean(), 2),
-        "Close Count": round(df_summary_matrix["Close Count"].mean(), 2),
-        "Close Ratio (%)": round(df_summary_matrix["Close Ratio (%)"].mean(), 2),
-        "Separate Count": round(df_summary_matrix["Separate Count"].mean(), 2),
-        "Separate Ratio (%)": round(df_summary_matrix["Separate Ratio (%)"].mean(), 2),
-        "Far Count": round(df_summary_matrix["Far Count"].mean(), 2),
-        "Far Ratio (%)": round(df_summary_matrix["Far Ratio (%)"].mean(), 2)
-    }
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_summary_matrix_export.to_csv(f"analysis-results/hrt_onion_to_hsdir/{context_label}_hrt_daily_matrix.csv", index=False)
-    
-    print(f"[HRT-INFO] Verified unique spatial analysis matrix written for: '{context_label}'")
-    return df_summary_matrix
-
-
-def calculate_hrt_onion_to_hsdir_distribution(df, context_label):
-    print(f"=== PROCESSING {context_label.upper()} HRT DISTRIBUTION SCATTER ===")
-    if df is None or df.empty:
-        print(f"[HRT-ERROR] Missing layout arrays for context '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_hrt_onion_to_hsdir(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating spatial metrics for specific service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_hrt_onion_to_hsdir(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 3: HRT INDEX DISTRIBUTIONS FOR ONION SERVICES AND HSDIRS (DAILY & WEEKLY VIEW)
-def compute_hrt_index_distributions(df_slice, context_label):
-    os.makedirs("analysis-results/hrt_index_distributions", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    has_onion_idx = "mapped_onion_index_100" in df_slice.columns #mapped_onion
-    has_rot_onion_idx = "last_known_onion_index_100" in df_slice.columns #last_known_onion
-    has_hsdir_idx = "hsdir_index_hrt_100" in df_slice.columns
-
-    if (not has_onion_idx or not has_rot_onion_idx) and not has_hsdir_idx :
-        print(f"[HRT-INDEX-ERROR] Neither onion's index nor HSDir's index found for {context_label}")
-        return None
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_data = df_slice[df_slice["date"] == observation_day].copy()
-        
-        hsdir_1st, hsdir_2nd, hsdir_3rd = 0, 0, 0
-        hsdir_1st_ratio, hsdir_2nd_ratio, hsdir_3rd_ratio = 0.0, 0.0, 0.0
-        total_unique_hsdirs = 0
-        
-        if has_hsdir_idx:
-            day_data["parsed_hsdir_idx"] = pd.to_numeric(day_data["hsdir_index_hrt_100"], errors='coerce')
-            valid_hsdir = day_data.dropna(subset=["parsed_hsdir_idx", "fingerprint"])
-            valid_hsdir = valid_hsdir[valid_hsdir["fingerprint"] != "None"]
-            unique_hsdirs = valid_hsdir.drop_duplicates(subset=["fingerprint"])
-            
-            total_unique_hsdirs = unique_hsdirs["fingerprint"].nunique()
-            if total_unique_hsdirs > 0:
-                hsdir_1st = unique_hsdirs[unique_hsdirs["parsed_hsdir_idx"] <= 33.33]["fingerprint"].nunique()
-                hsdir_2nd = unique_hsdirs[(unique_hsdirs["parsed_hsdir_idx"] > 33.33) & (unique_hsdirs["parsed_hsdir_idx"] <= 66.66)]["fingerprint"].nunique()
-                hsdir_3rd = unique_hsdirs[unique_hsdirs["parsed_hsdir_idx"] > 66.66]["fingerprint"].nunique()
-                
-                hsdir_1st_ratio = (hsdir_1st / total_unique_hsdirs * 100)
-                hsdir_2nd_ratio = (hsdir_2nd / total_unique_hsdirs * 100)
-                hsdir_3rd_ratio = (hsdir_3rd / total_unique_hsdirs * 100)
-
-        onion_1st, onion_2nd, onion_3rd = 0, 0, 0
-        onion_1st_ratio, onion_2nd_ratio, onion_3rd_ratio = 0.0, 0.0, 0.0
-        total_unique_onions = 0
-        
-        onion_col = "mapped_onion" if "mapped_onion" in day_data.columns else ("last_known_onion" if "last_known_onion" in day_data.columns else "fingerprint")
-        
-        if (has_onion_idx or has_rot_onion_idx) and onion_col in day_data.columns:
-            if has_onion_idx:
-                day_data["parsed_onion_idx"] = pd.to_numeric(day_data["mapped_onion_index_100"], errors='coerce')
-            else:
-                day_data["parsed_onion_idx"] = pd.to_numeric(day_data["last_known_onion_index_100"], errors='coerce')
-            valid_onion = day_data.dropna(subset=["parsed_onion_idx", onion_col])
-            valid_onion = valid_onion[valid_onion[onion_col] != "None"]
-            unique_onions = valid_onion.drop_duplicates(subset=[onion_col])
-            
-            total_unique_onions = unique_onions[onion_col].nunique()
-            if total_unique_onions > 0:
-                onion_1st = unique_onions[unique_onions["parsed_onion_idx"] <= 33.33][onion_col].nunique()
-                onion_2nd = unique_onions[(unique_onions["parsed_onion_idx"] > 33.33) & (unique_onions["parsed_onion_idx"] <= 66.66)][onion_col].nunique()
-                onion_3rd = unique_onions[unique_onions["parsed_onion_idx"] > 66.66][onion_col].nunique()
-                
-                onion_1st_ratio = (onion_1st / total_unique_onions * 100)
-                onion_2nd_ratio = (onion_2nd / total_unique_onions * 100)
-                onion_3rd_ratio = (onion_3rd / total_unique_onions * 100)
-
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Total Unique HSDirs": total_unique_hsdirs,
-            "HSDir 1st tertile HRT Count": hsdir_1st,
-            "HSDir 1st tertile HRT Ratio (%)": round(hsdir_1st_ratio, 2),
-            "HSDir 2nd tertile HRT Count": hsdir_2nd,
-            "HSDir 2nd tertile HRT Ratio (%)": round(hsdir_2nd_ratio, 2),
-            "HSDir 3rd tertile HRT Count": hsdir_3rd,
-            "HSDir 3rd tertile HRT Ratio (%)": round(hsdir_3rd_ratio, 2),
-            "Total Unique Onions": total_unique_onions,
-            "Onion 1st tertile HRT Count": onion_1st,
-            "Onion 1st tertile HRT Ratio (%)": round(onion_1st_ratio, 2),
-            "Onion 2nd tertile HRT Count": onion_2nd,
-            "Onion 2nd tertile HRT Ratio (%)": round(onion_2nd_ratio, 2),
-            "Onion 3rd tertile HRT Count": onion_3rd,
-            "Onion 3rd tertile HRT Ratio (%)": round(onion_3rd_ratio, 2)
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[HRT-INDEX-WARNING] No data metrics generated for context: {context_label}")
-        return None
-            
-    if has_hsdir_idx and df_summary_matrix["Total Unique HSDirs"].sum() > 0:
-        plt.figure(figsize=(14, 6))
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='HSDir 1st Tertile (<=33.33%)')
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='HSDir 2nd Tertile (33.33-66.66%)')
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["HSDir 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='HSDir 3rd Tertile (>66.66%)')
-        
-        for metric_col in ["HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count"]:
-            for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[metric_col]):
-                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-        plt.title(f"Tor v3 HSDir HRT Index Tertile Distribution ({context_label.replace('_', ' ').title()} - Daily)")
-        plt.xlabel("Observation Timeline")
-        plt.ylabel("Unique HSDir Count")
-        plt.xticks(rotation=45)
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_hsdir_index_daily_progression.png")
-        plt.close()
-    
-    if (has_onion_idx or has_rot_onion_idx) and df_summary_matrix["Total Unique Onions"].sum() > 0:
-        plt.figure(figsize=(14, 6))
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Onion 1st Tertile (<=33.33%)')
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Onion 2nd Tertile (33.33-66.66%)')
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Onion 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Onion 3rd Tertile (>66.66%)')
-
-        for metric_col in ["Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
-            for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[metric_col]):
-                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-        plt.title(f"Tor v3 Onion Target HRT Index Tertile Distribution ({context_label.replace('_', ' ').title()} - Daily)")
-        plt.xlabel("Observation Timeline")
-        plt.ylabel("Unique Onion Target Count")
-        plt.xticks(rotation=45)
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_onion_index_daily_progression.png")
-        plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total Unique HSDirs": "mean",
-        "HSDir 1st tertile HRT Count": "mean",
-        "HSDir 2nd tertile HRT Count": "mean",
-        "HSDir 3rd tertile HRT Count": "mean",
-        "Total Unique Onions": "mean",
-        "Onion 1st tertile HRT Count": "mean",
-        "Onion 2nd tertile HRT Count": "mean",
-        "Onion 3rd tertile HRT Count": "mean"
-    }).reset_index()
-    
-    df_weekly_matrix["HSDir 1st tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 1st tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["HSDir 2nd tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 2nd tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["HSDir 3rd tertile HRT Ratio (%)"] = (df_weekly_matrix["HSDir 3rd tertile HRT Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    
-    df_weekly_matrix["Onion 1st tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 1st tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
-    df_weekly_matrix["Onion 2nd tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 2nd tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
-    df_weekly_matrix["Onion 3rd tertile HRT Ratio (%)"] = (df_weekly_matrix["Onion 3rd tertile HRT Count"] / df_weekly_matrix["Total Unique Onions"] * 100).round(2)
-    
-    for col in ["Total Unique HSDirs", "HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count",
-                "Total Unique Onions", "Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
-        df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-        
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        
-        if has_hsdir_idx and df_weekly_matrix["Total Unique HSDirs"].sum() > 0:
-            plt.figure(figsize=(10, 6))
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Weekly Avg HSDir 1st Tertile')
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Weekly Avg HSDir 2nd Tertile')
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["HSDir 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Weekly Avg HSDir 3rd Tertile')
-            
-            for metric_col in ["HSDir 1st tertile HRT Count", "HSDir 2nd tertile HRT Count", "HSDir 3rd tertile HRT Count"]:
-                for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[metric_col]):
-                    plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-            plt.title(f"Tor v3 Weekly Averaged HSDir HRT Index Distribution ({context_label.replace('_', ' ').title()})")
-            plt.xlabel("Observation Timeline (Weeks)")
-            plt.ylabel("Mean Identity Volume")
-            plt.legend(loc="upper right")
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_hsdir_index_weekly_progression.png")
-            plt.close()
-            
-        if (has_onion_idx or has_rot_onion_idx) and df_weekly_matrix["Total Unique Onions"].sum() > 0:
-            plt.figure(figsize=(10, 6))
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 1st tertile HRT Count"], marker='o', color='green', linewidth=2, label='Weekly Avg Onion 1st Tertile')
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 2nd tertile HRT Count"], marker='s', color='blue', linewidth=2, label='Weekly Avg Onion 2nd Tertile')
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Onion 3rd tertile HRT Count"], marker='d', color='red', linewidth=2, label='Weekly Avg Onion 3rd Tertile')
-            
-            for metric_col in ["Onion 1st tertile HRT Count", "Onion 2nd tertile HRT Count", "Onion 3rd tertile HRT Count"]:
-                for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[metric_col]):
-                    plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-            plt.title(f"Tor v3 Weekly Averaged Onion HRT Index Distribution ({context_label.replace('_', ' ').title()})")
-            plt.xlabel("Observation Timeline (Weeks)")
-            plt.ylabel("Mean Identity Volume")
-            plt.legend(loc="upper right")
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/hrt_index_distributions/{context_label}_onion_index_weekly_progression.png")
-            plt.close()
-        
-        weekly_totals = {
-            "Observation Week": "Overall Weekly Average",
-            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
-            "HSDir 1st tertile HRT Count": round(df_weekly_matrix["HSDir 1st tertile HRT Count"].mean(), 2),
-            "HSDir 1st tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 1st tertile HRT Ratio (%)"].mean(), 2),
-            "HSDir 2nd tertile HRT Count": round(df_weekly_matrix["HSDir 2nd tertile HRT Count"].mean(), 2),
-            "HSDir 2nd tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 2nd tertile HRT Ratio (%)"].mean(), 2),
-            "HSDir 3rd tertile HRT Count": round(df_weekly_matrix["HSDir 3rd tertile HRT Count"].mean(), 2),
-            "HSDir 3rd tertile HRT Ratio (%)": round(df_weekly_matrix["HSDir 3rd tertile HRT Ratio (%)"].mean(), 2),
-            "Total Unique Onions": round(df_weekly_matrix["Total Unique Onions"].mean(), 2),
-            "Onion 1st tertile HRT Count": round(df_weekly_matrix["Onion 1st tertile HRT Count"].mean(), 2),
-            "Onion 1st tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 1st tertile HRT Ratio (%)"].mean(), 2),
-            "Onion 2nd tertile HRT Count": round(df_weekly_matrix["Onion 2nd tertile HRT Count"].mean(), 2),
-            "Onion 2nd tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 2nd tertile HRT Ratio (%)"].mean(), 2),
-            "Onion 3rd tertile HRT Count": round(df_weekly_matrix["Onion 3rd tertile HRT Count"].mean(), 2),
-            "Onion 3rd tertile HRT Ratio (%)": round(df_weekly_matrix["Onion 3rd tertile HRT Ratio (%)"].mean(), 2)
-        }
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/hrt_index_distributions/{context_label}_hrt_index_weekly_matrix.csv", index=False)
-
-    daily_totals = {
-        "Observation Date": "Overall Average",
-        "Total Unique HSDirs": round(df_summary_matrix["Total Unique HSDirs"].mean(), 2),
-        "HSDir 1st tertile HRT Count": round(df_summary_matrix["HSDir 1st tertile HRT Count"].mean(), 2),
-        "HSDir 1st tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 1st tertile HRT Ratio (%)"].mean(), 2),
-        "HSDir 2nd tertile HRT Count": round(df_summary_matrix["HSDir 2nd tertile HRT Count"].mean(), 2),
-        "HSDir 2nd tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 2nd tertile HRT Ratio (%)"].mean(), 2),
-        "HSDir 3rd tertile HRT Count": round(df_summary_matrix["HSDir 3rd tertile HRT Count"].mean(), 2),
-        "HSDir 3rd tertile HRT Ratio (%)": round(df_summary_matrix["HSDir 3rd tertile HRT Ratio (%)"].mean(), 2),
-        "Total Unique Onions": round(df_summary_matrix["Total Unique Onions"].mean(), 2),
-        "Onion 1st tertile HRT Count": round(df_summary_matrix["Onion 1st tertile HRT Count"].mean(), 2),
-        "Onion 1st tertile HRT Ratio (%)": round(df_summary_matrix["Onion 1st tertile HRT Ratio (%)"].mean(), 2),
-        "Onion 2nd tertile HRT Count": round(df_summary_matrix["Onion 2nd tertile HRT Count"].mean(), 2),
-        "Onion 2nd tertile HRT Ratio (%)": round(df_summary_matrix["Onion 2nd tertile HRT Ratio (%)"].mean(), 2),
-        "Onion 3rd tertile HRT Count": round(df_summary_matrix["Onion 3rd tertile HRT Count"].mean(), 2),
-        "Onion 3rd tertile HRT Ratio (%)": round(df_summary_matrix["Onion 3rd tertile HRT Ratio (%)"].mean(), 2)
-    }
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_summary_matrix_export.to_csv(f"analysis-results/hrt_index_distributions/{context_label}_hrt_index_daily_matrix.csv", index=False)
-    
-    print(f"[HRT-INDEX-INFO] Metric matrices saved successfully for context: '{context_label}'")
-    return df_summary_matrix
-
-
-def calculate_hrt_index_distributions(df, context_label):
-    print(f"=== PROCESSING {context_label.upper()} HRT INDEX TERTILE ANALYSIS ===")
-    if df is None or df.empty:
-        print(f"[HRT-INDEX-ERROR] Missing layout arrays for context '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_hrt_index_distributions(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating metrics for specific service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_hrt_index_distributions(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 4: SYBIL PATTERN FOR /16 AND /24 IP BLOCKS DISTRIBUTIONS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
-def compute_sybil_pattern_ip_distribution(df_slice, context_label):
-    os.makedirs("analysis-results/sybil_ip_blocks", exist_ok=True)
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if df_slice.empty or "ip_address" not in df_slice.columns or "fingerprint" not in df_slice.columns:
-        print(f"[SYBIL-IP-ERROR] Missing critical structural fields for label: {context_label}")
-        return None
-            
-    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
-    if df_unstable.empty:
-        print(f"[SYBIL-IP-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
-        return None
-
-    def extract_v4_subnet(ip, prefix_mask):
-        if isinstance(ip, str) and ip != 'None' and '.' in ip:
-            segments = ip.split('.')
-            if prefix_mask == 24 and len(segments) >= 3:
-                return f"{segments[0]}.{segments[1]}.{segments[2]}.0/24"
-            elif prefix_mask == 16 and len(segments) >= 2:
-                return f"{segments[0]}.{segments[1]}.0.0/16"
-        return "Unknown"
-
-    df_unstable["subnet_24"] = df_unstable["ip_address"].apply(lambda ip: extract_v4_subnet(ip, 24))
-    df_unstable["subnet_16"] = df_unstable["ip_address"].apply(lambda ip: extract_v4_subnet(ip, 16))
-
-    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-
-    daily_records_24 = []
-    daily_records_16 = []
-
-    for obs_day in unique_days_sorted:
-        day_data = df_unstable[df_unstable["date"] == obs_day]
-        
-        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
-        
-        counts_24 = day_unique["subnet_24"].value_counts()
-        for subnet, count in counts_24.items():
-            if subnet != "Unknown":
-                daily_records_24.append({
-                    "Observation Date": obs_day,
-                    "Subnet": subnet,
-                    "Count": count
-                })
-                
-        counts_16 = day_unique["subnet_16"].value_counts()
-        for subnet, count in counts_16.items():
-            if subnet != "Unknown":
-                daily_records_16.append({
-                    "Observation Date": obs_day,
-                    "Subnet": subnet,
-                    "Count": count
-                })
-
-    df_daily_matrix = pd.DataFrame()
-
-    for mask, records, prefix_suffix in [(24, daily_records_24, "24"), (16, daily_records_16, "16")]:
-        if not records:
-            print(f"[SYBIL-IP-INFO] No valid records generated for /{mask} under label: {context_label}")
-            continue
-            
-        df_raw_counts = pd.DataFrame(records)
-        
-        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Subnet", values="Count").fillna(0)
-        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
-        
-        all_subnets = list(df_pivot.columns)
-        if not all_subnets:
-            continue
-        
-        df_daily_matrix = df_pivot.reset_index()
-        daily_summary_baseline = {"Observation Date": "Overall Average"}
-        for col in all_subnets:
-            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
-        
-        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
-        df_daily_export.to_csv(f"analysis-results/sybil_ip_blocks/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(13, 7))
-        has_plotted_daily = False
-        for col in all_subnets:
-            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series.notna().any():
-                has_plotted_daily = True
-                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
-                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_daily:
-            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (/{mask} Blocks)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline")
-            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
-            plt.xticks(rotation=45)
-            plt.legend(title="Network Blocks", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/sybil_ip_blocks/{context_label}_daily_plot_{prefix_suffix}.png")
-        plt.close()
-        
-        df_weekly_prep = df_daily_matrix.copy()
-        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-        
-        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_subnets].mean().reset_index()
-        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-        
-        for col in all_subnets:
-            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-            
-        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
-        for col in all_subnets:
-            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
-            
-        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
-        df_weekly_export.to_csv(f"analysis-results/sybil_ip_blocks/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(11, 6))
-        has_plotted_weekly = False
-        for col in all_subnets:
-            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series_weekly.notna().any():
-                has_plotted_weekly = True
-                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
-                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_weekly:
-            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (/{mask} Blocks)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline (Weeks)")
-            plt.ylabel("Mean Unique Fingerprint Count")
-            plt.legend(title="Network Blocks", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/sybil_ip_blocks/{context_label}_weekly_plot_{prefix_suffix}.png")
-        plt.close()
-
-    print(f"[SYBIL-IP-INFO] Metric matrices saved successfully for context: '{context_label}'")
-    return df_daily_matrix if not df_daily_matrix.empty else None
-
-
-def calculate_sybil_pattern_ip_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN IP DISTRIBUTION ANALYSIS")
-    if df is None or df.empty:
-        print(f"[SYBIL-IP-ERROR] Missing layout arrays for context '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_sybil_pattern_ip_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating metrics for specific service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_sybil_pattern_ip_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 5: SYBIL PATTERN FOR DECLARED FAMILY IDS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
-def compute_sybil_family_id_distribution(df_slice, context_label):
-    os.makedirs("analysis-results/sybil_family_ids", exist_ok=True)
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if df_slice.empty or "declared_family_id" not in df_slice.columns or "fingerprint" not in df_slice.columns:
-        print(f"[SYBIL-FAM-ERROR] Missing critical structural fields for label: {context_label}")
-        return None
-            
-    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
-    if df_unstable.empty:
-        print(f"[SYBIL-FAM-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
-        return None
-
-    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None', None]]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-
-    daily_records = []
-
-    for obs_day in unique_days_sorted:
-        day_data = df_unstable[df_unstable["date"] == obs_day]
-        
-        # Avoid double-counting the same node on the same day
-        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
-        
-        counts = day_unique["declared_family_id"].value_counts()
-        for fam_id, count in counts.items():
-            # Filter out empty, missing, or explicitly null representations
-            if fam_id not in ["Unknown", "None", None, "", "nan", "null"]:
-                daily_records.append({
-                    "Observation Date": obs_day,
-                    "Family ID": fam_id,
-                    "Count": count
-                })
-
-    df_daily_matrix = pd.DataFrame()
-
-    for records, prefix_suffix in [(daily_records, "declared_family_id")]:
-        if not records:
-            print(f"[SYBIL-FAM-INFO] No valid cryptographic family records generated under label: {context_label}")
-            continue
-            
-        df_raw_counts = pd.DataFrame(records)
-        
-        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Family ID", values="Count").fillna(0)
-        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
-        
-        all_families = list(df_pivot.columns)
-        if not all_families:
-            continue
-        
-        df_daily_matrix = df_pivot.reset_index()
-        daily_summary_baseline = {"Observation Date": "Overall Average"}
-        for col in all_families:
-            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
-        
-        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
-        df_daily_export.to_csv(f"analysis-results/sybil_family_ids/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(13, 7))
-        has_plotted_daily = False
-        for col in all_families:
-            # Filter low density lines if desired; lowered threshold slightly to catch smaller explicit clusters
-            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series.notna().any():
-                has_plotted_daily = True
-                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
-                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_daily:
-            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (by Cryptographic Family ID)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline")
-            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
-            plt.xticks(rotation=45)
-            plt.legend(title="Family Identifiers", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/sybil_family_ids/{context_label}_daily_plot_{prefix_suffix}.png")
-        plt.close()
-        
-        df_weekly_prep = df_daily_matrix.copy()
-        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-        
-        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_families].mean().reset_index()
-        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-        
-        for col in all_families:
-            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-            
-        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
-        for col in all_families:
-            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
-            
-        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
-        df_weekly_export.to_csv(f"analysis-results/sybil_family_ids/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(11, 6))
-        has_plotted_weekly = False
-        for col in all_families:
-            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series_weekly.notna().any():
-                has_plotted_weekly = True
-                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
-                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_weekly:
-            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (by Cryptographic Family ID)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline (Weeks)")
-            plt.ylabel("Mean Unique Fingerprint Count")
-            plt.legend(title="Family Identifiers", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"analysis-results/sybil_family_ids/{context_label}_weekly_plot_{prefix_suffix}.png")
-        plt.close()
-
-    print(f"[SYBIL-FAM-INFO] Family ID matrices saved successfully for context: '{context_label}'")
-    return df_daily_matrix if not df_daily_matrix.empty else None
-
-
-def calculate_sybil_family_id_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN FAMILY ID DISTRIBUTION ANALYSIS")
-    if df is None or df.empty:
-        print(f"[SYBIL-FAM-ERROR] Missing layout arrays for context '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_sybil_family_id_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating family metrics for specific service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_sybil_family_id_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 6: SYBIL PATTERN FOR DECLARED FAMILY LISTS - OPERATOR IDENTIFICATION (DAILY & WEEKLY VIEW)
-def compute_sybil_family_list_distribution(df_slice, context_label):
-    output_dir = "analysis-results/sybil_family_lists"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if df_slice.empty or "declared_family" not in df_slice.columns or "fingerprint" not in df_slice.columns:
-        print(f"[SYBIL-FAM-LIST-ERROR] Missing critical structural fields for label: {context_label}")
-        return None
-            
-    df_unstable = df_slice[df_slice["status"] != "ACTIVE_IN_RING"].copy()
-    if df_unstable.empty:
-        print(f"[SYBIL-FAM-LIST-INFO] No entries found matching status != 'ACTIVE_IN_RING' for label: {context_label}")
-        return None
-
-    def generate_canonical_cluster_id(row):
-        node_fp = row.get("fingerprint")
-        family_list = row.get("declared_family")
-        
-        if not isinstance(family_list, (list, tuple, np.ndarray)):
-            return "Unknown"
-            
-        combined_set = set()
-        if isinstance(node_fp, str) and node_fp not in ["None", "Unknown", ""]:
-            combined_set.add(node_fp.strip().upper())
-            
-        for item in family_list:
-            if isinstance(item, str) and item not in ["None", "Unknown", ""]:
-                combined_set.add(item.strip().upper())
-                
-        if not combined_set or (len(combined_set) == 1 and node_fp in combined_set):
-            return "Unknown"
-            
-        return ",".join(sorted(list(combined_set)))
-
-    df_unstable["canonical_family_group"] = df_unstable.apply(generate_canonical_cluster_id, axis=1)
-    
-    df_unstable = df_unstable[df_unstable["canonical_family_group"] != "Unknown"]
-    if df_unstable.empty:
-        print(f"[SYBIL-FAM-LIST-INFO] No active family relationships found for label: {context_label}")
-        return None
-
-    unique_clusters = df_unstable["canonical_family_group"].unique()
-    operator_label_map = {}
-    for idx, cluster in enumerate(unique_clusters):
-        first_fp = cluster.split(',')[0]
-        short_id = first_fp[:6] if len(first_fp) >= 6 else f"Grp{idx}"
-        operator_label_map[cluster] = f"Operator_{short_id}"
-        
-    df_unstable["operator_identifier"] = df_unstable["canonical_family_group"].map(operator_label_map)
-
-    unique_days = [d for d in df_unstable["date"].unique() if d not in ['', 'None', None]]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-
-    daily_records = []
-
-    for obs_day in unique_days_sorted:
-        day_data = df_unstable[df_unstable["date"] == obs_day]
-        
-        day_unique = day_data.drop_duplicates(subset=["fingerprint"])
-        
-        counts = day_unique["operator_identifier"].value_counts()
-        for op_id, count in counts.items():
-            daily_records.append({
-                "Observation Date": obs_day,
-                "Operator Identifier": op_id,
-                "Count": count
-            })
-
-    df_daily_matrix = pd.DataFrame()
-
-    for records, prefix_suffix in [(daily_records, "family_list")]:
-        if not records:
-            print(f"[SYBIL-FAM-LIST-INFO] No valid operator records generated under label: {context_label}")
-            continue
-            
-        df_raw_counts = pd.DataFrame(records)
-        
-        df_pivot = df_raw_counts.pivot(index="Observation Date", columns="Operator Identifier", values="Count").fillna(0)
-        df_pivot = df_pivot.reindex(unique_days_sorted).fillna(0)
-        
-        all_operators = list(df_pivot.columns)
-        if not all_operators:
-            continue
-        
-        df_daily_matrix = df_pivot.reset_index()
-        daily_summary_baseline = {"Observation Date": "Overall Average"}
-        for col in all_operators:
-            daily_summary_baseline[col] = round(df_daily_matrix[col].mean(), 2)
-        
-        df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_summary_baseline])], ignore_index=True)
-        df_daily_export.to_csv(f"{output_dir}/{context_label}_daily_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(13, 7))
-        has_plotted_daily = False
-        for col in all_operators:
-            plot_series = df_daily_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series.notna().any():
-                has_plotted_daily = True
-                plt.plot(df_daily_matrix["Observation Date"], plot_series, marker='o', linewidth=2, label=col)
-                for x_val, y_val in zip(df_daily_matrix["Observation Date"], df_daily_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{int(y_val)}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_daily:
-            plt.title(f"Tor v3 Daily Co-located Unstable Directory Density (by Mutual Family List Mapping)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline")
-            plt.ylabel("Unique Fingerprint Target Count (status != ACTIVE_IN_RING)")
-            plt.xticks(rotation=45)
-            plt.legend(title="Identified Entity Operators", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"{output_dir}/{context_label}_daily_plot_{prefix_suffix}.png")
-        plt.close()
-        
-        df_weekly_prep = df_daily_matrix.copy()
-        df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-        df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-        
-        df_weekly_matrix = df_weekly_prep.groupby("WeekIndex")[all_operators].mean().reset_index()
-        df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-        
-        for col in all_operators:
-            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-            
-        weekly_summary_baseline = {"Observation Week": "Overall Weekly Average"}
-        for col in all_operators:
-            weekly_summary_baseline[col] = round(df_weekly_matrix[col].mean(), 2)
-            
-        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_summary_baseline])], ignore_index=True)
-        df_weekly_export.to_csv(f"{output_dir}/{context_label}_weekly_matrix_{prefix_suffix}.csv", index=False)
-        
-        plt.figure(figsize=(11, 6))
-        has_plotted_weekly = False
-        for col in all_operators:
-            plot_series_weekly = df_weekly_matrix[col].apply(lambda x: x if x >= 5 else np.nan)
-            
-            if plot_series_weekly.notna().any():
-                has_plotted_weekly = True
-                plt.plot(df_weekly_matrix["Observation Week"], plot_series_weekly, marker='s', linewidth=2, label=col)
-                for x_val, y_val in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[col]):
-                    if y_val >= 5:
-                        plt.annotate(f"{y_val}", (x_val, y_val), textcoords="offset points", xytext=(0, 6), ha='center', fontsize=8)
-                        
-        if has_plotted_weekly:
-            plt.title(f"Tor v3 Weekly Averaged Unstable Directory Density (by Mutual Family List Mapping)\nDataset Segment: {context_label.replace('_', ' ').title()}")
-            plt.xlabel("Observation Timeline (Weeks)")
-            plt.ylabel("Mean Unique Fingerprint Count")
-            plt.legend(title="Identified Entity Operators", loc="upper left", bbox_to_anchor=(1.02, 1))
-            plt.tight_layout()
-            plt.savefig(f"{output_dir}/{context_label}_weekly_plot_{prefix_suffix}.png")
-        plt.close()
-
-    print(f"[SYBIL-FAM-LIST-INFO] Family List matrices saved successfully for context: '{context_label}'")
-    return df_daily_matrix if not df_daily_matrix.empty else None
-
-
-def calculate_sybil_family_list_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} SYBIL PATTERN FAMILY LIST DISTRIBUTION ANALYSIS")
-    if df is None or df.empty:
-        print(f"[SYBIL-FAM-LIST-ERROR] Missing layout arrays for context '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_sybil_family_list_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating list-family metrics for specific service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_sybil_family_list_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 7: TRACKING CHRONOLOGICAL HSDIR SESSION UPTIME WINDOWS (DAILY & WEEKLY VIEW)
-def compute_uptime_distribution(df_slice, context_label):
-    os.makedirs("analysis-results/uptime_distributions", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if "hour" not in df_slice.columns or "fingerprint" not in df_slice.columns:
-        print(f"[UPTIME-ERROR] Missing critical structural fields ('hour' or 'fingerprint') for label: {context_label}")
-        return None
-
-    df_working = df_slice.copy()
-    
-    if df_working["hour"].dtype == object or isinstance(df_working["hour"].iloc[0], str):
-        if df_working["hour"].str.contains(":").any():
-            hour_parts = df_working["hour"].str.split(":", expand=True)
-            df_working["hour_num"] = hour_parts[0].astype(int) + hour_parts[1].astype(int) / 60.0
-        else:
-            df_working["hour_num"] = pd.to_numeric(df_working["hour"], errors='coerce').fillna(0)
-    else:
-        df_working["hour_num"] = df_working["hour"].astype(float)
-    
-    unique_days = [d for d in df_working["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_data = df_working[df_working["date"] == observation_day]
-        all_sessions_durations = []
-        
-        for fp in day_data["fingerprint"].unique():
-            df_fp = day_data[day_data["fingerprint"] == fp].sort_values(by="hour_num")
-            
-            current_start = None
-            current_last = None
-            
-            for _, row in df_fp.iterrows():
-                is_active = row["status"] in ["ACTIVE_IN_RING", "None"]
-                
-                has_temporal_gap = (current_last is not None) and (row["hour_num"] - current_last > 2.5)
-                
-                if is_active and not has_temporal_gap:
-                    if current_start is None:
-                        current_start = row["hour_num"]
-                    current_last = row["hour_num"]
-                else:
-                    if current_start is not None:
-                        duration = max(1.0, current_last - current_start)
-                        all_sessions_durations.append(duration)
-                    
-                    if is_active:
-                        current_start = row["hour_num"]
-                        current_last = row["hour_num"]
-                    else:
-                        current_start = None
-                        current_last = None
-            
-            if current_start is not None:
-                duration = max(1.0, current_last - current_start)
-                all_sessions_durations.append(duration)
-                
-        total_unique_sessions = len(all_sessions_durations)
-        if total_unique_sessions == 0:
-            continue
-            
-        durations_arr = np.array(all_sessions_durations)
-        
-        mean_uptime   = durations_arr.mean()
-        median_uptime = np.median(durations_arr)
-        max_uptime    = durations_arr.max()
-        min_uptime    = durations_arr.min()
-        
-        full_uptime_count  = np.sum(durations_arr >= 20)
-        high_uptime_count  = np.sum((durations_arr >= 12) & (durations_arr < 20))
-        mod_uptime_count   = np.sum((durations_arr >= 6) & (durations_arr < 12))
-        low_uptime_count   = np.sum(durations_arr < 6)
-        
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Total HSDir Sessions": total_unique_sessions,
-            "Mean Session Uptime (hrs)": round(mean_uptime, 2),
-            "Median Session Uptime (hrs)": round(median_uptime, 2),
-            "Max Session Uptime (hrs)": int(max_uptime),
-            "Min Session Uptime (hrs)": int(min_uptime),
-            "Full Uptime (>=20h)": int(full_uptime_count),
-            "High Uptime (12-19h)": int(high_uptime_count),
-            "Moderate Uptime (6-11h)": int(mod_uptime_count),
-            "Low Uptime (<6h)": int(low_uptime_count)
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[UPTIME-WARNING] Summary matrix empty for context: {context_label}")
-        return None
-
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Mean Session Uptime (hrs)"], marker='o', color='purple', linewidth=2, label='Mean Session Duration')
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Median Session Uptime (hrs)"], marker='s', color='teal', linewidth=2, label='Median Session Duration')
-    
-    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Mean Session Uptime (hrs)"]):
-        plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-    for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix["Median Session Uptime (hrs)"]):
-        plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-        
-    plt.title(f"Tor v3 HSDir Daily Active Session Lifespan Profile ({context_label.replace('_', ' ').title()})")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Session Duration Value (Hours)")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    plt.savefig(f"analysis-results/uptime_distributions/{context_label}_hsdir_daily_uptime_distribution.png")
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total HSDir Sessions": "mean",
-        "Mean Session Uptime (hrs)": "mean",
-        "Median Session Uptime (hrs)": "mean",
-        "Max Session Uptime (hrs)": "max",
-        "Min Session Uptime (hrs)": "min",
-        "Full Uptime (>=20h)": "mean",
-        "High Uptime (12-19h)": "mean",
-        "Moderate Uptime (6-11h)": "mean",
-        "Low Uptime (<6h)": "mean"
-    }).reset_index()
-    
-    for col in df_weekly_matrix.columns:
-        if col != "WeekIndex":
-            df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-            
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-    
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Mean Session Uptime (hrs)"], marker='^', color='indigo', linewidth=2, label='Weekly Mean Uptime Baseline')
-        
-        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Mean Session Uptime (hrs)"]):
-            plt.annotate(f"{y}h", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-        plt.title(f"Tor v3 Weekly Averaged HSDir Active Session Profile ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Hours Operational")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/uptime_distributions/{context_label}_hsdir_weekly_uptime_distribution.png")
-        plt.close()
-        
-        weekly_totals = {"Observation Week": "Overall Weekly Average"}
-        for col in df_weekly_matrix.columns:
-            if col != "Observation Week":
-                weekly_totals[col] = round(df_weekly_matrix[col].mean(), 2)
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/uptime_distributions/{context_label}_hsdir_weekly_uptime_matrix.csv", index=False)
-
-    daily_totals = {"Observation Date": "Overall Average"}
-    for col in df_summary_matrix.columns:
-        if col != "Observation Date":
-            daily_totals[col] = round(df_summary_matrix[col].mean(), 2)
-            
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_summary_matrix_export.to_csv(f"analysis-results/uptime_distributions/{context_label}_hsdir_daily_uptime_matrix.csv", index=False)
-    
-    print(f"[UPTIME-INFO] Complete operational active matrices saved under context label: '{context_label}'")
-    return df_summary_matrix
-
-def calculate_hsdir_uptime_distributions(df, context_label):
-
-    print(f"PROCESSING {context_label.upper()} CONTINUOUS INSTANCE SESSION UPTIME DISCOVERY DISTRIBUTION ANALYSIS")
-    if df is None or df.empty:
-        print(f"[UPTIME-ERROR] Missing valid data slice matrix layouts for context '{context_label}'.")
-        return None
-        
-    global_reporting_matrix = compute_uptime_distribution(df, context_label)
-
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating continuous active session lifetimes for onion type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_uptime_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
-
-
-# ANALYSIS 8: TRACKING DAILY AND WEEKLY UNIQUE HSDIR RECONNECTION PATTERNS (CHURN)
-def compute_churn_reconnect_distribution(df_slice, context_label):
-    os.makedirs("analysis-results/str_behave_status", exist_ok=True)
-    computed_daily_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    if "hour" not in df_slice.columns or "fingerprint" not in df_slice.columns:
-        print(f"[CHURN-ERROR] Missing critical fields ('hour' or 'fingerprint') for label: {context_label}")
-        return None
-
-    df_working = df_slice.copy()
-    if df_working.empty:
-        print(f"[CHURN-WARNING] Empty data slice received for label: {context_label}")
-        return None
-    
-    if df_working["hour"].dtype == object or isinstance(df_working["hour"].iloc[0], str):
-        if df_working["hour"].str.contains(":").any():
-            hour_parts = df_working["hour"].str.split(":", expand=True)
-            df_working["hour_num"] = hour_parts[0].astype(int) + hour_parts[1].astype(int) / 60.0
-        else:
-            df_working["hour_num"] = pd.to_numeric(df_working["hour"], errors='coerce').fillna(0)
-    else:
-        df_working["hour_num"] = df_working["hour"].astype(float)
-        
-    df_working["DayNum"] = df_working["date"].apply(get_day_integer)
-    df_working["global_hour"] = (df_working["DayNum"] * 24) + df_working["hour_num"]
-    df_working["WeekIndex"] = df_working["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-
-    unique_days_sorted = sorted([d for d in df_working["date"].unique() if d not in ['', 'None']], key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_data = df_working[df_working["date"] == observation_day]
-        total_observed_fps = day_data["fingerprint"].nunique()
-        total_daily_reconnections = 0
-        
-        for fp in day_data["fingerprint"].unique():
-            df_fp = day_data[day_data["fingerprint"] == fp].sort_values(by="hour_num")
-            
-            reconnect_events = 0
-            state = None
-            
-            for _, row in df_fp.iterrows():
-                is_curr_active = row["status"] in ["ACTIVE_IN_RING", "None"] or pd.isna(row["status"])
-                
-                if state is None:
-                    state = "ACTIVE" if is_curr_active else "OFFLINE"
-                elif state == "ACTIVE" and not is_curr_active:
-                    state = "OFFLINE"
-                elif state == "OFFLINE" and is_curr_active:
-                    reconnect_events = 1
-                    state = "ACTIVE"
-            
-            total_daily_reconnections += reconnect_events
-            
-        reconnect_rate = (total_daily_reconnections / total_observed_fps * 100) if total_observed_fps > 0 else 0.0
-        computed_daily_metrics.append({
-            "Observation Date": observation_day,
-            "Total Unique HSDirs": total_observed_fps,
-            "Reconnecting Unique HSDirs": total_daily_reconnections,
-            "Daily Reconnection Rate (%)": round(reconnect_rate, 2)
-        })
-        
-    df_daily_churn = pd.DataFrame(computed_daily_metrics)
-
-    if df_daily_churn.empty:
-        print(f"[CHURN-ERROR] Summary matrix empty for context: {context_label}")
-        return None
-
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_daily_churn["Observation Date"], df_daily_churn["Reconnecting Unique HSDirs"], marker='o', color='purple', linewidth=2, label='Reconnecting HSDir Count')
-    for x, y in zip(df_daily_churn["Observation Date"], df_daily_churn["Reconnecting Unique HSDirs"]):
-        plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-        
-    plt.title(f"Tor v3 Unique HSDir Daily Reconnection Counts ({context_label.replace('_', ' ').title()})")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Relay Count (Total Reconnections)")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_daily_reconnect_count_churn.png")
-    plt.close()
-
-    weekly_unique_reconnects = {}
-    unique_weeks_sorted = sorted([w for w in df_working["WeekIndex"].unique() if w not in ['', 'None']])
-    
-    for observation_week in unique_weeks_sorted:
-        week_data = df_working[df_working["WeekIndex"] == observation_week]
-        reconnecting_fps_count = 0
-        
-        for fp in week_data["fingerprint"].unique():
-            df_fp = week_data[week_data["fingerprint"] == fp].sort_values(by="global_hour")
-            
-            reconnect_events = 0
-            state = None
-            
-            for _, row in df_fp.iterrows():
-                is_curr_active = row["status"] in ["ACTIVE_IN_RING", "None"] or pd.isna(row["status"])
-                
-                if state is None:
-                    state = "ACTIVE" if is_curr_active else "OFFLINE"
-                elif state == "ACTIVE" and not is_curr_active:
-                    state = "OFFLINE"
-                elif state == "OFFLINE" and is_curr_active:
-                    reconnect_events = 1
-                    state = "ACTIVE"
-
-            if reconnect_events >= 1:
-                reconnecting_fps_count += 1
-                
-        weekly_unique_reconnects[observation_week] = reconnecting_fps_count
-
-    df_weekly_prep = df_daily_churn.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_churn = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total Unique HSDirs": "mean",
-        "Reconnecting Unique HSDirs": "mean",
-    }).reset_index()
-    
-    df_weekly_churn["Reconnecting Unique HSDirs Count"] = df_weekly_churn["WeekIndex"].map(weekly_unique_reconnects).fillna(0)
-    df_weekly_churn["Total Unique HSDirs"] = df_weekly_churn["Total Unique HSDirs"].round(2)
-    df_weekly_churn["Reconnecting Unique HSDirs"] = df_weekly_churn["Reconnecting Unique HSDirs"].round(2)
-    df_weekly_churn["Reconnecting Unique HSDirs Count"] = df_weekly_churn["Reconnecting Unique HSDirs Count"].round(2)
-    df_weekly_churn.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_churn.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs Count"], marker='s', color='teal', linewidth=2, label='Weekly Reconnecting Count')
-        for x, y in zip(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs Count"]):
-            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-        plt.title(f"Tor v3 Unique HSDir Weekly Reconnection Counts ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Relay Count (Unique Fingerprints)")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_count_churn.png")
-        plt.close()
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs"], marker='s', color='teal', linewidth=2, label='Weekly Reconnecting Count')
-        for x, y in zip(df_weekly_churn["Observation Week"], df_weekly_churn["Reconnecting Unique HSDirs"]):
-            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-        plt.title(f"Tor v3 Unique HSDir Weekly Reconnection Avg ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Relay Count (Unique Fingerprints)")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_progression_churn.png")
-        plt.close()
-
-    daily_totals = {"Observation Date": "Overall Average"}
-    for col in df_daily_churn.columns:
-        if col != "Observation Date":
-            daily_totals[col] = round(df_daily_churn[col].mean(), 2)
-    df_daily_export = pd.concat([df_daily_churn, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_daily_export.to_csv(f"analysis-results/str_behave_status/{context_label}_hsdir_daily_reconnect_matrix.csv", index=False)
-
-    if not df_weekly_churn.empty:
-        weekly_totals = {"Observation Week": "Overall Weekly Average"}
-        for col in df_weekly_churn.columns:
-            if col != "Observation Week":
-                weekly_totals[col] = round(df_weekly_churn[col].mean(), 2)
-        df_weekly_export = pd.concat([df_weekly_churn, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_export.to_csv(f"analysis-results/str_behave_status/{context_label}_hsdir_weekly_reconnect_matrix.csv", index=False)
-
-    print(f"[CHURN-INFO] Churn and Reconnection matrices saved under context label: '{context_label}'")
-    return df_daily_churn
-
-
-def calculate_hsdir_reconnect_churn_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} CHURN-RECONNECT INTRA-WINDOW TRACKING ANALYSES")
-    if df is None or df.empty:
-        print(f"[CHURN-ERROR] Missing valid data slice matrix layouts for context '{context_label}'.")
-        return None
-        
-    global_churn_matrix = compute_churn_reconnect_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating churn patterns for hidden service identifier: {service}")
-            sub_pop = df[df["service_type"] == service]
-            if not sub_pop.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_churn_reconnect_distribution(sub_pop, segmented_label)
-                
-    return global_churn_matrix
-
-
-# ANALYSIS 9: RARE-STRANGE HSDIR BEHAVIOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY VIEW)
-def compute_rare_hsdir_behaviour_distribution(df_slice, df_events, context_label):
-    os.makedirs("analysis-results/str_behave_ring_events", exist_ok=True)
-    computed_daily_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
-
-    def clear_hour_to_float(hour_str):
-        if pd.isna(hour_str) or not isinstance(hour_str, str) or ":" not in hour_str:
-            return 0.0
+# ---------------------------------------------------------------------------
+# Sybil distribution analysis (family-id and IP based)
+# ---------------------------------------------------------------------------
+
+def _chronological_days(df):
+    """
+    Return the distinct values of df['date'] ordered chronologically.
+    Post-validate_sort_data(), 'date' holds sequential "Day N" labels, so we
+    sort on the numeric N rather than lexicographically (which would put
+    "Day 10" before "Day 2"). Any value that doesn't match "Day N" is kept
+    but sorted to the end, so nothing is silently dropped.
+    """
+    days = list(pd.unique(df['date']))
+
+    def day_key(d):
         try:
-            parts = hour_str.split(":")
-            return int(parts[0]) + int(parts[1]) / 60.0
-        except Exception:
-            return 0.0
+            return int(str(d).split(' ')[1])
+        except (IndexError, ValueError):
+            return float('inf')
 
-    if df_slice.empty:
-        print(f"[RARE-WARNING] Empty snapshot data slice received for context: {context_label}")
+    return sorted(days, key=day_key)
+
+
+def _plot_sybil_series(df, group_col, top_group_ids, output_path, title, metric_label):
+    """
+    Save one figure with, per entry in `top_group_ids`, a solid line for its
+    absolute per-day unique-fingerprint count (left axis) and a dashed line
+    for its per-day network share (right, twin axis) -- both in the same
+    color per group so the two series are easy to pair up visually.
+
+    Network share for a given day is that group's unique-fingerprint count
+    on that day divided by the unique-fingerprint count across the WHOLE
+    `df` (all groups, including the excluded "None"/ungrouped bucket) on
+    that day -- i.e. the daily counterpart of the overall network-share
+    figure printed to the terminal, so both numbers describe "share of the
+    total observed network" rather than "share among only the top groups".
+    """
+    days = _chronological_days(df)
+
+    daily_group_counts = (
+        df[df[group_col].isin(top_group_ids)]
+        .groupby(['date', group_col])['fingerprint']
+        .nunique()
+    )
+    daily_totals = df.groupby('date')['fingerprint'].nunique()
+
+    fig, ax1 = plt.subplots(figsize=(11, 6))
+    ax2 = ax1.twinx()
+    colors = plt.cm.tab10.colors
+
+    for i, group_id in enumerate(top_group_ids):
+        color = colors[i % len(colors)]
+
+        counts = [daily_group_counts.get((day, group_id), 0) for day in days]
+        totals = [daily_totals.get(day, 0) for day in days]
+        # Days with zero total nodes (shouldn't normally happen) or zero
+        # nodes for this group both yield a share of 0, never a ZeroDivisionError.
+        shares = [(c / t) if t else 0.0 for c, t in zip(counts, totals)]
+
+        legend_id = str(group_id)
+        if len(legend_id) > 18:
+            legend_id = legend_id[:15] + "..."
+
+        ax1.plot(days, counts, linestyle='-', marker='o', color=color,
+                  label=f"{legend_id} (count)")
+        ax2.plot(days, shares, linestyle='--', marker='s', color=color,
+                  label=f"{legend_id} (share)")
+
+    ax1.set_xlabel("Day")
+    ax1.set_ylabel(f"Unique fingerprint count — solid  ({metric_label})")
+    ax2.set_ylabel("Network share — dashed")
+    ax1.set_title(title)
+    ax1.tick_params(axis='x', rotation=45)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8,
+               loc='upper left', bbox_to_anchor=(1.1, 1))
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _sybil_top5_report_and_plot(df, group_col, label, output_path, metric_label=None,
+                                 exclude_none_bucket=True):
+    """
+    Shared logic for both deliverables: rank `group_col` values by unique
+    -fingerprint count, print the top 5 (full id + absolute count + overall
+    network share), and save the per-day count/share figure.
+
+    The "None" bucket (declared_family_id == 'None' means no declared
+    family -- i.e. a non-sybil singleton node; ip_address/subnet == 'None'
+    means missing/unusable address data) is excluded from the ranking by
+    default: for family IDs specifically, singleton nodes would otherwise
+    dominate every ranking and defeat the point of a sybil-cluster view.
+    Set exclude_none_bucket=False to include it if that's ever useful.
+    """
+    if metric_label is None:
+        metric_label = group_col
+
+    total_unique = df['fingerprint'].nunique()
+    scoped = df[df[group_col] != 'None'] if exclude_none_bucket else df
+
+    if scoped.empty:
+        print(f"[SYBIL-INFO] No usable '{metric_label}' groups for {label}; skipping.")
+        return
+
+    group_counts = scoped.groupby(group_col)['fingerprint'].nunique().sort_values(ascending=False)
+    top_groups = group_counts.head(5)
+
+    print(f"\n[SYBIL] Top {metric_label} groups — {label}")
+    for group_id, count in top_groups.items():
+        share = (count / total_unique) if total_unique else 0.0
+        print(f"    {group_id}: {count} unique nodes  (network share: {share:.4%})")
+
+    _plot_sybil_series(
+        df, group_col, list(top_groups.index), output_path,
+        title=f"{label} — {metric_label} sybil distribution",
+        metric_label=metric_label,
+    )
+
+
+def family_id_sybil_distributions(df, context_label):
+    """
+    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
+    shape), rank declared_family_id groups by unique-fingerprint count,
+    print the top 5 with their overall network share, and save a per-day
+    count/share figure to
+    analysis-results/sybil/family-id/{context_label}_family_id_sybil.png.
+
+    When context_label == "tracked", additionally repeats the same
+    analysis once per distinct service_type, saved to
+    analysis-results/sybil/family-id/{service_type_lower}_family_id_sybil.png.
+    """
+    base_dir = os.path.join("analysis-results", "sybil", "family-id")
+
+    _sybil_top5_report_and_plot(
+        df, 'declared_family_id', context_label,
+        os.path.join(base_dir, f"{context_label}_family_id_sybil.png"),
+        metric_label="declared_family_id",
+    )
+
+    if context_label == "tracked" and 'service_type' in df.columns:
+        service_types = sorted(t for t in df['service_type'].dropna().unique() if t not in ('None', ''))
+        for service_type in service_types:
+            subset = df[df['service_type'] == service_type]
+            _sybil_top5_report_and_plot(
+                subset, 'declared_family_id', f"tracked — {service_type}",
+                os.path.join(base_dir, f"{service_type.lower()}_family_id_sybil.png"),
+                metric_label="declared_family_id",
+            )
+
+
+def _to_24_subnet(ip_str):
+    """
+    Derive the /24 subnet string for an IPv4 address (e.g. '192.168.2.12'
+    -> '192.168.2.0/24') using the standard ipaddress module. Missing,
+    'None', or malformed/non-IPv4 address text is normalized to the
+    literal string 'None' so it's excluded the same way a missing
+    declared_family_id is elsewhere in this file.
+    """
+    if ip_str in (None, 'None', ''):
+        return 'None'
+    try:
+        return str(ipaddress.ip_network(f"{ip_str}/24", strict=False))
+    except ValueError:
+        return 'None'
+
+
+def ip_sybil_distributions(df, context_label):
+    """
+    Deliverable B. Same structure as family_id_sybil_distributions, but
+    groups by IP-based identity instead of declared_family_id, in two
+    variants: exact ip_address, and the derived /24 subnet. Saved under
+    analysis-results/sybil/ip_sybil/ as
+    {context_label}_ip_sybil.png / {context_label}_ip_24_subnet_sybil.png
+    (and, for context_label == "tracked", additionally per service_type as
+    {service_type_lower}_ip_sybil.png / {service_type_lower}_ip_24_subnet_sybil.png).
+    """
+    base_dir = os.path.join("analysis-results", "sybil", "ip_sybil")
+
+    working = df.copy()
+    working['_ip_24_subnet'] = working['ip_address'].apply(_to_24_subnet)
+
+    def run_both_variants(sub_df, label, filename_prefix):
+        _sybil_top5_report_and_plot(
+            sub_df, 'ip_address', label,
+            os.path.join(base_dir, f"{filename_prefix}_ip_sybil.png"),
+            metric_label="ip_address",
+        )
+        _sybil_top5_report_and_plot(
+            sub_df, '_ip_24_subnet', label,
+            os.path.join(base_dir, f"{filename_prefix}_ip_24_subnet_sybil.png"),
+            metric_label="/24 subnet",
+        )
+
+    run_both_variants(working, context_label, context_label)
+
+    if context_label == "tracked" and 'service_type' in working.columns:
+        service_types = sorted(t for t in working['service_type'].dropna().unique() if t not in ('None', ''))
+        for service_type in service_types:
+            subset = working[working['service_type'] == service_type]
+            run_both_variants(subset, f"tracked — {service_type}", service_type.lower())
+
+
+def service_type_overlap_diagnostic(df, context_label):
+    """
+    Diagnostic: explains why per-service_type unique-fingerprint counts
+    (as printed inside family_id_sybil_distributions / ip_sybil_distributions
+    for the tracked DataFrame) don't sum to the overall tracked
+    unique-fingerprint count.
+
+    Each row in the tracked data is a (relay, mapped_onion) pairing, not
+    one row per physical relay -- so a single relay's fingerprint can
+    appear under more than one service_type if it acts as HSDir for
+    onions in different service_type buckets (at the same time, or at
+    different points across the tracked period). That relay is correctly
+    counted once in EACH per-service_type subset it touches, but only
+    once in the overall count -- so subsets overlap and their counts are
+    not additive. This function quantifies that overlap directly:
+
+    - groups by `fingerprint` and collects the *set* of distinct
+      service_type values each one was ever seen under in `df`
+    - reports how many relays touch only one service_type vs. 2+ 
+    - breaks that down by the exact combination (e.g.
+      "EPHEMERAL_VARIABLE + STATIC_CONTROL": N relays)
+
+    Only meaningful where `service_type` exists (the tracked DataFrame --
+    network-wide data has no such column, so it's skipped there). Prints
+    the summary and combination breakdown to the terminal, and saves the
+    full breakdown as a CSV so exact figures can be cited in the thesis
+    ("N relays / N% of tracked relays served more than one service_type
+    over the study period") at
+    analysis-results/sybil/{context_label}_service_type_overlap.csv.
+    Returns the breakdown as a DataFrame (None if service_type isn't
+    present).
+    """
+
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+
+    if 'service_type' not in df.columns:
+        print(f"[OVERLAP-INFO] '{context_label}' has no service_type column; skipping diagnostic.")
         return None
 
-    if df_events is None or df_events.empty:
-        df_rare_events = pd.DataFrame(columns=["date", "hour", "action", "reason", "fingerprint"])
+    fp_service_sets = (
+        df.groupby('fingerprint')['service_type']
+        .apply(lambda s: frozenset(t for t in s.unique() if t not in ('None', '')))
+    )
+    fp_service_sets = fp_service_sets[fp_service_sets.apply(len) > 0]
+
+    total_relays = len(fp_service_sets)
+    if total_relays == 0:
+        print(f"[OVERLAP-INFO] No relays with a usable service_type for {context_label}; skipping diagnostic.")
+        return None
+
+    overlap_mask = fp_service_sets.apply(len) > 1
+    overlap_relays = int(overlap_mask.sum())
+
+    print(f"\n[OVERLAP] service_type overlap — {context_label}")
+    print(f"    total distinct relays (any service_type): {total_relays}")
+    print(f"    relays touching 2+ service_types: {overlap_relays} "
+          f"({overlap_relays / total_relays:.2%} of {total_relays})")
+
+    combo_counts = fp_service_sets.value_counts()
+    combo_rows = [
+        {
+            'service_type_combination': " + ".join(sorted(combo)),
+            'num_service_types': len(combo),
+            'relay_count': count,
+        }
+        for combo, count in combo_counts.items()
+    ]
+    combo_df = pd.DataFrame(combo_rows).sort_values(
+        ['num_service_types', 'relay_count'], ascending=[False, False]
+    ).reset_index(drop=True)
+
+    print("    breakdown by exact combination:")
+    for _, row in combo_df.iterrows():
+        print(f"      {row['service_type_combination']}: {row['relay_count']} relays")
+
+    out_dir = os.path.join("analysis-results", "sybil")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{context_label}_service_type_overlap.csv")
+    combo_df.to_csv(out_path, index=False)
+    print(f"    --> Saved diagnostic table: {out_path}")
+
+    return combo_df
+
+
+# ---------------------------------------------------------------------------
+# Entity-drop distribution analysis (family-id and IP based)
+# ---------------------------------------------------------------------------
+
+def _chronological_snapshots(df):
+    """
+    Return the distinct (date, hour) pairs in `df`, in chronological order:
+    by "Day N" number first, then by the literal "HH:MM" hour string within
+    each day (which sorts correctly as-is since it's always zero-padded
+    24h time). Snapshot cadence is whatever the data actually has -- e.g.
+    every 1h in one file, every 2h in another -- so this makes no
+    assumption of a fixed interval or a fixed 24-snapshot day.
+    """
+    pairs = df[['date', 'hour']].drop_duplicates()
+
+    def day_key(d):
+        try:
+            return int(str(d).split(' ')[1])
+        except (IndexError, ValueError):
+            return float('inf')
+
+    pairs = pairs.assign(_day_key=pairs['date'].map(day_key))
+    pairs = pairs.sort_values(['_day_key', 'hour'])
+    return list(zip(pairs['date'], pairs['hour']))
+
+
+def _classify_drops(df, group_col, exclude_none_bucket=True):
+    """
+    For every (date, hour) snapshot, classify each `group_col` group (e.g.
+    declared_family_id, ip_address, or a /24 subnet) present in that
+    snapshot as a 'partial' drop (>=1 ACTIVE_IN_RING member AND >=1
+    non-ACTIVE_IN_RING member that snapshot), a 'total' drop (0 active
+    members, all present members inactive), or no drop at all (0 inactive
+    members -- excluded entirely, since a family with no inactive members
+    can't be experiencing any kind of drop).
+
+    The "None"/ungrouped bucket is excluded by default for the same
+    reason as in the sybil-distribution functions: a singleton node with
+    no declared family (or an unusable IP) can't exhibit a partial-vs
+    -total *operator* drop pattern. Set exclude_none_bucket=False to
+    include it.
+
+    Returns a long DataFrame, one row per (date, hour, group_col value)
+    that has a drop, with columns ['date', 'hour', group_col,
+    'total_members', 'drop_type'] -- 'total_members' is that group's
+    unique-fingerprint count in that snapshot (active + inactive).
+    """
+    scoped = df[df[group_col] != 'None'] if exclude_none_bucket else df
+
+    total_counts = (
+        scoped.groupby(['date', 'hour', group_col])['fingerprint'].nunique()
+    )
+    active_counts = (
+        scoped[scoped['status'] == 'ACTIVE_IN_RING']
+        .groupby(['date', 'hour', group_col])['fingerprint'].nunique()
+    )
+
+    summary = total_counts.rename('total_members').to_frame()
+    summary['active_members'] = active_counts.reindex(summary.index, fill_value=0)
+    summary['inactive_members'] = summary['total_members'] - summary['active_members']
+
+    summary = summary[summary['inactive_members'] > 0].copy()
+    summary['drop_type'] = np.where(summary['active_members'] > 0, 'partial', 'total')
+
+    return summary.reset_index()[['date', 'hour', group_col, 'total_members', 'drop_type']]
+
+
+def _print_top5_drop_counts(drop_df, group_col, label, metric_label):
+    """
+    Item 4 of the entity-drops spec: across the whole (already
+    service-type-scoped, if applicable) DataFrame, count how many distinct
+    (date, hour) snapshots each group registered a partial drop in, and
+    separately a total drop in, and print the top 5 for each -- full group
+    id, drop type, absolute snapshot count.
+    """
+    for drop_type, drop_name in (('partial', 'partial-drop'), ('total', 'total-drop')):
+        subset = drop_df[drop_df['drop_type'] == drop_type]
+        if subset.empty:
+            print(f"[DROPS-INFO] No {drop_name} snapshots found for {metric_label} — {label}.")
+            continue
+
+        snapshot_counts = subset.groupby(group_col).size().sort_values(ascending=False)
+        top5 = snapshot_counts.head(5)
+
+        print(f"\n[DROPS] Top {metric_label} groups by {drop_name} snapshot count — {label}")
+        for group_id, count in top5.items():
+            print(f"    {group_id}: {drop_name}, {count} snapshot(s)")
+
+
+def _plot_entity_drops_series(df, drop_df, output_path, title):
+    """
+    Save one figure with 4 series across the chronological (date, hour)
+    snapshot sequence: absolute partial-drop count (solid blue), absolute
+    total-drop count (solid red), partial-drop network share (dashed
+    blue), total-drop network share (dashed red).
+
+    "Count" is the number of distinct groups (families / IPs / /24
+    subnets) that registered that drop type in that snapshot -- e.g. if
+    2 families each had >=1 active and >=1 inactive member that snapshot,
+    the partial-drop count for that snapshot is 2, regardless of how many
+    nodes those 2 families control. This is a count of drop *events*, not
+    a sum of affected nodes.
+
+    "Share" is a separate, complementary signal: it divides the sum of
+    total_members (active + inactive) across all groups with that drop
+    type by the whole `df`'s unique-fingerprint count for that same
+    snapshot -- i.e. what fraction of the network's actual node
+    population is sitting inside a partially/totally dropped group,
+    which can move independently of how many groups are affected (a
+    single large family dropping moves this more than several tiny ones).
+    Same "share of the total observed network" convention used by the
+    sybil-distribution functions.
+
+    X-axis ticks show one "Day N" label per day (at that day's first
+    snapshot) rather than one per (date, hour) snapshot, so hour-to-hour
+    spikes stay visible as individual plotted points without the axis
+    turning into an unreadable wall of labels. A day with only a single
+    snapshot still plots fine as one point.
+    """
+    snapshots = _chronological_snapshots(df)
+    snapshot_totals = df.groupby(['date', 'hour'])['fingerprint'].nunique()
+
+    # Count of drop EVENTS (how many groups registered each drop type),
+    # used for the solid "count" lines.
+    partial_event_counts = (
+        drop_df[drop_df['drop_type'] == 'partial']
+        .groupby(['date', 'hour']).size()
+    )
+    total_event_counts = (
+        drop_df[drop_df['drop_type'] == 'total']
+        .groupby(['date', 'hour']).size()
+    )
+    # Sum of affected NODES (active + inactive members of dropped groups),
+    # used only for the dashed "share" lines.
+    partial_node_sums = (
+        drop_df[drop_df['drop_type'] == 'partial']
+        .groupby(['date', 'hour'])['total_members'].sum()
+    )
+    total_node_sums = (
+        drop_df[drop_df['drop_type'] == 'total']
+        .groupby(['date', 'hour'])['total_members'].sum()
+    )
+
+    x = list(range(len(snapshots)))
+    partial_counts, total_counts, partial_shares, total_shares = [], [], [], []
+    for snap in snapshots:
+        denom = snapshot_totals.get(snap, 0)
+        partial_counts.append(partial_event_counts.get(snap, 0))
+        total_counts.append(total_event_counts.get(snap, 0))
+        p_nodes = partial_node_sums.get(snap, 0)
+        t_nodes = total_node_sums.get(snap, 0)
+        # Zero total-network denominator (or zero drop that snapshot)
+        # yields a share of 0, never a ZeroDivisionError.
+        partial_shares.append((p_nodes / denom) if denom else 0.0)
+        total_shares.append((t_nodes / denom) if denom else 0.0)
+
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    ax2 = ax1.twinx()
+
+    ax1.plot(x, partial_counts, linestyle='-', color='blue', marker='o', label='Partial drop (count)')
+    ax1.plot(x, total_counts, linestyle='-', color='red', marker='o', label='Total drop (count)')
+    ax2.plot(x, partial_shares, linestyle='--', color='blue', marker='s', label='Partial drop (share)')
+    ax2.plot(x, total_shares, linestyle='--', color='red', marker='s', label='Total drop (share)')
+
+    day_first_index = {}
+    for i, (date, _hour) in enumerate(snapshots):
+        if date not in day_first_index:
+            day_first_index[date] = i
+    ax1.set_xticks(list(day_first_index.values()))
+    ax1.set_xticklabels(list(day_first_index.keys()), rotation=45)
+
+    ax1.set_xlabel("Day")
+    ax1.set_ylabel("Groups with a drop (count) — solid")
+    ax2.set_ylabel("Network share — dashed")
+    ax1.set_title(title)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8,
+               loc='upper left', bbox_to_anchor=(1.1, 1))
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _entity_drops_report_and_plot(df, group_col, label, output_path, metric_label=None,
+                                   exclude_none_bucket=True):
+    """
+    Shared logic for both entity-drops deliverables: classify per-snapshot
+    partial/total drops for `group_col`, print the top-5-by-snapshot-count
+    for each drop type, and save the 4-series time plot.
+    """
+    if metric_label is None:
+        metric_label = group_col
+
+    drop_df = _classify_drops(df, group_col, exclude_none_bucket=exclude_none_bucket)
+    if drop_df.empty:
+        print(f"[DROPS-INFO] No drop events found for '{metric_label}' — {label}; skipping.")
+        return
+
+    _print_top5_drop_counts(drop_df, group_col, label, metric_label)
+
+    _plot_entity_drops_series(
+        df, drop_df, output_path,
+        title=f"{label} — {metric_label} entity drops",
+    )
+
+
+def family_id_entity_drops_distributions(df, context_label):
+    """
+    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
+    shape), classifies each declared_family_id group's per-snapshot status
+    as a partial or total drop, prints the top-5-by-snapshot-count for
+    each drop type, and saves the 4-series time plot to
+    analysis-results/sybil/family-id/{context_label}_family_id_entity_drops.png.
+
+    When context_label == "tracked", additionally repeats the same
+    analysis once per distinct service_type, saved to
+    analysis-results/sybil/family-id/{service_type_lower}_family_id_entity_drops.png.
+    """
+    base_dir = os.path.join("analysis-results", "sybil", "family-id")
+
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+
+    _entity_drops_report_and_plot(
+        df, 'declared_family_id', context_label,
+        os.path.join(base_dir, f"{context_label}_family_id_entity_drops.png"),
+        metric_label="declared_family_id",
+    )
+
+    if context_label == "tracked" and 'service_type' in df.columns:
+        service_types = sorted(t for t in df['service_type'].dropna().unique() if t not in ('None', ''))
+        for service_type in service_types:
+            subset = df[df['service_type'] == service_type]
+            _entity_drops_report_and_plot(
+                subset, 'declared_family_id', f"tracked — {service_type}",
+                os.path.join(base_dir, f"{service_type.lower()}_family_id_entity_drops.png"),
+                metric_label="declared_family_id",
+            )
+
+
+def ip_entity_drops_distributions(df, context_label):
+    """
+    Deliverable B (IP-based equivalent). Same structure as
+    family_id_entity_drops_distributions, but groups by IP-based identity
+    instead of declared_family_id, in two variants: exact ip_address, and
+    the derived /24 subnet (via the same _to_24_subnet helper used by
+    ip_sybil_distributions). Saved under analysis-results/sybil/ip_sybil/
+    as {context_label}_ip_entity_drops.png /
+    {context_label}_ip_24_subnet_entity_drops.png (and, for
+    context_label == "tracked", additionally per service_type as
+    {service_type_lower}_ip_entity_drops.png /
+    {service_type_lower}_ip_24_subnet_entity_drops.png).
+    """
+    base_dir = os.path.join("analysis-results", "sybil", "ip_sybil")
+
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+
+    working = df.copy()
+    working['_ip_24_subnet'] = working['ip_address'].apply(_to_24_subnet)
+
+    def run_both_variants(sub_df, label, filename_prefix):
+        _entity_drops_report_and_plot(
+            sub_df, 'ip_address', label,
+            os.path.join(base_dir, f"{filename_prefix}_ip_entity_drops.png"),
+            metric_label="ip_address",
+        )
+        _entity_drops_report_and_plot(
+            sub_df, '_ip_24_subnet', label,
+            os.path.join(base_dir, f"{filename_prefix}_ip_24_subnet_entity_drops.png"),
+            metric_label="/24 subnet",
+        )
+
+    run_both_variants(working, context_label, context_label)
+
+    if context_label == "tracked" and 'service_type' in working.columns:
+        service_types = sorted(t for t in working['service_type'].dropna().unique() if t not in ('None', ''))
+        for service_type in service_types:
+            subset = working[working['service_type'] == service_type]
+            run_both_variants(subset, f"tracked — {service_type}", service_type.lower())
+
+
+# ---------------------------------------------------------------------------
+# Rotated-node stability distribution analysis
+# ---------------------------------------------------------------------------
+
+def _daily_active_inactive_counts(df, dedupe_on_service_type=False):
+    """
+    Per-day unique active / inactive / total counts. When
+    dedupe_on_service_type is True, dedupe on the (fingerprint,
+    service_type) pair instead of fingerprint alone -- this is the
+    rotated_tracked general-count overlap rule: a physical node that
+    directory-hosts more than one tracked service that day is counted
+    once per distinct service_type it served, not once overall.
+    """
+    working = df.copy()
+    if dedupe_on_service_type:
+        working['_dedupe_key'] = list(zip(working['fingerprint'], working['service_type']))
     else:
-        df_rare_events = df_events[(df_events["action"] == "FAILED") & (df_events["reason"] == "NOT_FOUND")].copy()
+        working['_dedupe_key'] = working['fingerprint']
 
-    df_working_snapshots = df_slice.copy()
-    df_working_snapshots["hour_float"] = df_working_snapshots["hour"].apply(clear_hour_to_float)
-    df_rare_events["hour_float"] = df_rare_events["hour"].apply(clear_hour_to_float) if "hour" in df_rare_events.columns else 0.0
+    is_active = working['status'] == 'ACTIVE_IN_RING'
+    total_count = working.groupby('date')['_dedupe_key'].nunique()
+    active_count = (
+        working[is_active].groupby('date')['_dedupe_key'].nunique()
+        .reindex(total_count.index, fill_value=0)
+    )
+    inactive_count = total_count - active_count
+    return active_count, inactive_count, total_count
 
-    unique_days = [d for d in df_working_snapshots["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    for observation_day in unique_days_sorted:
-        day_snapshots = df_working_snapshots[df_working_snapshots["date"] == observation_day]
-        day_events = df_rare_events[df_rare_events["date"] == observation_day]
-        
-        total_unique_active_fps = day_snapshots[day_snapshots["status"] == "ACTIVE_IN_RING"]["fingerprint"].nunique()
-        
-        rare_fps_this_day = set()
-        
-        if not day_events.empty and not day_snapshots.empty:
-            snapshot_hours = np.array(sorted(day_snapshots["hour_float"].unique()))
-            
-            for _, event_row in day_events.iterrows():
-                ev_hour = event_row["hour_float"]
-                closest_snap_hour = snapshot_hours[np.argmin(np.abs(snapshot_hours - ev_hour))]
-                
-                hour_snapshots = day_snapshots[
-                    (day_snapshots["hour_float"] == closest_snap_hour) & 
-                    (day_snapshots["status"] == "ACTIVE_IN_RING")
-                ]
-                
-                if "fingerprint" in event_row and event_row["fingerprint"] != "None":
-                    matched_fps = hour_snapshots[hour_snapshots["fingerprint"] == event_row["fingerprint"]]["fingerprint"].unique()
-                    rare_fps_this_day.update(matched_fps)
-                else:
-                    rare_fps_this_day.update(hour_snapshots["fingerprint"].unique())
-        
-        active_fps_set = set(day_snapshots[day_snapshots["status"] == "ACTIVE_IN_RING"]["fingerprint"].unique())
-        rare_fps_this_day = rare_fps_this_day.intersection(active_fps_set)
-        
-        rare_count = len(rare_fps_this_day)
-        ratio_rare = (rare_count / total_unique_active_fps * 100) if total_unique_active_fps > 0 else 0.0
-        
-        computed_daily_metrics.append({
-            "Observation Date": observation_day,
-            "Total Unique HSDirs": total_unique_active_fps,
-            "Rare Behaviour Count": rare_count,
-            "Rare Behaviour Ratio (%)": round(ratio_rare, 2)
+
+def _daily_fractions(active_count, inactive_count, total_count, days):
+    """
+    Convert per-day active/inactive/total count Series into aligned
+    active_fraction / inactive_fraction lists over `days` (in
+    chronological order). A day absent from the counts (e.g. a
+    service_type with no rows that day) or with zero total nodes yields
+    a fraction of 0 rather than a gap or a ZeroDivisionError.
+    """
+    active_fractions, inactive_fractions = [], []
+    for day in days:
+        total = total_count.get(day, 0)
+        active = active_count.get(day, 0)
+        inactive = inactive_count.get(day, 0)
+        active_fractions.append((active / total) if total else 0.0)
+        inactive_fractions.append((inactive / total) if total else 0.0)
+    return active_fractions, inactive_fractions
+
+
+def _mean_fraction(fractions):
+    """
+    Unweighted arithmetic mean of a list of per-day fractions -- i.e. the
+    average of each day's percentage, not a count-weighted average across
+    all nodes/days combined. E.g. 80%, 90%, 87%, 92%, 85% averages to
+    86.8%, regardless of how many nodes were active each of those days.
+    Returns 0.0 for an empty list rather than dividing by zero.
+    """
+    return (sum(fractions) / len(fractions)) if fractions else 0.0
+
+
+def _plot_diverging_stability_bar(days, active_fractions, inactive_fractions, output_path, title):
+    """
+    Diverging bar chart: one blue bar (active_fraction, positive) and one
+    red bar (inactive_fraction, plotted as its negative) per day, against
+    a zero baseline. A bar chart rather than a line plot since this is
+    one value pair per day, not a multi-point-per-day series.
+    """
+    x = list(range(len(days)))
+
+    fig, ax = plt.subplots(figsize=(max(11, len(days) * 0.6), 6))
+    ax.bar(x, active_fractions, color='blue', label='Active fraction')
+    ax.bar(x, [-v for v in inactive_fractions], color='red', label='Inactive fraction')
+    ax.axhline(0, color='black', linewidth=0.8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(days, rotation=45)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Fraction of nodes (active positive / inactive negative)")
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.02, 1))
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _plot_diverging_stability_grouped_bar(days, service_type_fractions, output_path, title):
+    """
+    Combined diverging bar chart for multiple service types on one figure:
+    grouped/clustered bars per day, one blue/red bar pair per service
+    type, each service type in a distinct shade (Blues colormap for
+    active, Reds colormap for inactive), with a legend identifying which
+    shade belongs to which service_type.
+
+    `service_type_fractions`: dict {service_type: (active_fractions,
+    inactive_fractions)}, each list already aligned to `days`.
+    """
+    service_types = list(service_type_fractions.keys())
+    n = len(service_types)
+    x = np.arange(len(days))
+    bar_width = 0.8 / max(n, 1)
+    # Sample mid-to-dark shades so bars stay visible against a white
+    # background even for the first service type.
+    shades = np.linspace(0.4, 0.9, n) if n > 1 else [0.7]
+    blue_cmap = plt.cm.Blues
+    red_cmap = plt.cm.Reds
+
+    fig, ax = plt.subplots(figsize=(max(11, len(days) * 0.8), 6))
+
+    for i, service_type in enumerate(service_types):
+        active_fractions, inactive_fractions = service_type_fractions[service_type]
+        offset = (i - (n - 1) / 2) * bar_width
+        ax.bar(x + offset, active_fractions, width=bar_width,
+               color=blue_cmap(shades[i]), label=f"{service_type} (active)")
+        ax.bar(x + offset, [-v for v in inactive_fractions], width=bar_width,
+               color=red_cmap(shades[i]), label=f"{service_type} (inactive)")
+
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(days, rotation=45)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Fraction of nodes (active positive / inactive negative)")
+    ax.set_title(title)
+    ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.02, 1))
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def daily_rotated_nodes_stability_distributions(df, context_label):
+    """
+    For `df` (a rotated network-wide or rotated tracked DataFrame, in the
+    shape produced by validate_sort_data()) and context_label
+    ("rotated_network" or "rotated_tracked"): per "Day N", compute the
+    unique active (status == ACTIVE_IN_RING) and inactive fraction of
+    nodes, print them, and save a diverging bar chart (active fraction as
+    a positive blue bar, inactive fraction as a negative red bar) to
+    analysis-results/stability/rotated/{context_label}_daily_rotated_node_stability.png.
+
+    context_label == "rotated_tracked" is handled specially in two ways:
+    1. The general (whole-DataFrame) count above dedupes on the
+       (fingerprint, service_type) pair rather than fingerprint alone, so
+       a node tracked under N distinct service_types that day contributes
+       N times -- per the spec's explicit overlap rule for this general
+       count. rotated_network has no such overlap (there's nothing to
+       dedupe by), so it dedupes on fingerprint alone.
+    2. Additionally repeats the per-day active/inactive fraction
+       computation once per distinct service_type (each subset already
+       single-service-type, so no overlap-dedupe needed there), and saves
+       ONE combined grouped-bar figure with every service type's
+       diverging fractions together, to
+       analysis-results/stability/rotated/daily_rotated_service_type_node_stability.png.
+
+    Branches strictly on context_label, not on service_type column
+    presence -- rotated_network also carries a service_type column, just
+    uniformly "None" after cleaning, so step 2 above only ever runs for
+    "rotated_tracked".
+    """
+    base_dir = os.path.join("analysis-results", "stability", "rotated")
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+    days = _chronological_days(df)
+
+    dedupe_on_service_type = (context_label == "rotated_tracked")
+    active_count, inactive_count, total_count = _daily_active_inactive_counts(
+        df, dedupe_on_service_type=dedupe_on_service_type
+    )
+    active_fractions, inactive_fractions = _daily_fractions(active_count, inactive_count, total_count, days)
+
+    print(f"\n[STABILITY] Daily rotated-node active/inactive fractions — {context_label}")
+    # for day, active_frac, inactive_frac in zip(days, active_fractions, inactive_fractions):
+    #     print(f"    {day}: active={active_frac:.4%}  inactive={inactive_frac:.4%}")
+
+    mean_active = _mean_fraction(active_fractions)
+    mean_inactive = _mean_fraction(inactive_fractions)
+    print(f"    Average % of active HSDir nodes: {mean_active:.4%}")
+    print(f"    Average % of inactive HSDir nodes: {mean_inactive:.4%}")
+
+    _plot_diverging_stability_bar(
+        days, active_fractions, inactive_fractions,
+        os.path.join(base_dir, f"{context_label}_daily_rotated_node_stability.png"),
+        title=f"{context_label} — daily rotated node stability",
+    )
+
+    if context_label == "rotated_tracked" and 'service_type' in df.columns:
+        service_types = sorted(t for t in df['service_type'].dropna().unique() if t not in ('None', ''))
+        if service_types:
+            service_type_fractions = {}
+            for service_type in service_types:
+                subset = df[df['service_type'] == service_type]
+                st_active, st_inactive, st_total = _daily_active_inactive_counts(
+                    subset, dedupe_on_service_type=False
+                )
+                st_active_fracs, st_inactive_fracs = _daily_fractions(st_active, st_inactive, st_total, days)
+                service_type_fractions[service_type] = (st_active_fracs, st_inactive_fracs)
+
+                print(f"\n[STABILITY] Daily rotated-node active/inactive fractions — {context_label} — {service_type}")
+                # for day, active_frac, inactive_frac in zip(days, st_active_fracs, st_inactive_fracs):
+                #     print(f"    {day}: active={active_frac:.4%}  inactive={inactive_frac:.4%}")
+
+                st_mean_active = _mean_fraction(st_active_fracs)
+                st_mean_inactive = _mean_fraction(st_inactive_fracs)
+                print(f"    Average % of active HSDir nodes: {st_mean_active:.4%}")
+                print(f"    Average % of inactive HSDir nodes: {st_mean_inactive:.4%}")
+
+            _plot_diverging_stability_grouped_bar(
+                days, service_type_fractions,
+                os.path.join(base_dir, "daily_rotated_service_type_node_stability.png"),
+                title=f"{context_label} — daily rotated node stability by service type",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Ring-position uniformity analysis (unified: onion->HSDir distance,
+# HSDir ring index, onion ring index)
+#
+# This one function replaces three near-duplicate v5 source functions
+# (compute_onion_to_hsdir_uniformity, compute_hsdir_index_uniformity, and a
+# never-written onion-index variant). It computes the same per-day
+# uniformity/churn statistic family for three different ring-position
+# metrics, each scoped to the context_labels where its source column exists,
+# built on the vectorized groupby/pivot/diff approach specified in
+# reimplement_onion_hsdir_uniformity.md rather than the original nested
+# day x onion x hour Python loops.
+#
+# Resolved design decisions (all per the prompt's defaults, flagged in the
+# reply to the user):
+#   * active convention: STRICT — only status == "ACTIVE_IN_RING" is active,
+#     matching every other function in this file (the v5 source also treated
+#     a missing/"None" status as active; we don't).
+#   * output root: hyphenated "analysis-results/" to match the rest of the
+#     file (the task doc's "analysis_results/" underscore is treated as a typo).
+#   * ECDF filename generalized to {context_label}_distance_uniformity_ecdf.png.
+#   * per-service-type dispersion breakdown kept at the literally-specified
+#     {service_type_lower}_distance_uniformity_ecdf.png even though its content
+#     is the dispersion plot, not an ECDF (flagged as probably-unintended).
+#   * combined churn-scatter overlay named
+#     service_types_churn_vs_distance_dispersion.png (the doc's repeated
+#     "service_types_distance_uniformity_ecdf" there is treated as a copy/paste slip).
+#   * EPHEMERAL_VARIABLE dispersion plot: per-day pooled mean +/- std across
+#     that day's ephemeral onions, since each ephemeral onion lives one day
+#     and a per-onion-across-days line degenerates to a single point.
+# ---------------------------------------------------------------------------
+
+TWO_POW_256 = 2 ** 256
+
+# Metric registry. Each entry describes one ring-position metric: which
+# source column feeds it (with an optional fallback), how that column maps
+# into normalized [0,1] space, which per-day entity it groups by, which
+# context_labels it's valid for, and where its outputs go.
+_UNIFORMITY_METRICS = {
+    "onion_to_hsdir": {
+        "value_col": "hsdir_to_onion_ring_distance",
+        "fallback_col": "hsdir_to_onion_ring_position",
+        "fallback_divisor": 100.0,
+        "kind": "raw_over_2pow256",
+        "entity": "mapped_onion",
+        "valid_contexts": ("tracked",),
+        "output_dir": os.path.join("analysis-results", "uniformity", "onion_to_hsdir"),
+        "value_label": "Normalized Ring Distance [0, 1]",
+        "metric_title": "Onion-to-HSDir Ring Distance",
+    },
+    "hsdir_index": {
+        "value_col": "hsdir_index_hrt_hex",
+        "fallback_col": "hsdir_index_hrt_100",
+        "fallback_divisor": 100.0,
+        "kind": "hex_over_2pow256",
+        "entity": "fingerprint",
+        "valid_contexts": ("tracked", "network"),
+        "output_dir": os.path.join("analysis-results", "uniformity", "hsdir_index"),
+        "value_label": "Normalized Ring Index [0, 1]",
+        "metric_title": "HSDir Hash-Ring Index",
+    },
+    "onion_index": {
+        "value_col": "mapped_onion_index_hex",
+        "fallback_col": None,
+        "fallback_divisor": None,
+        "kind": "hex_over_2pow256",
+        "entity": "mapped_onion",
+        "valid_contexts": ("tracked",),
+        "output_dir": os.path.join("analysis-results", "uniformity", "onion_index"),
+        "value_label": "Normalized Onion Ring Index [0, 1]",
+        "metric_title": "Onion Hash-Ring Index",
+    },
+}
+
+
+def _parse_hex_to_unit(series):
+    """
+    Vectorized hex-string -> [0,1] conversion: int(hex, 16) / 2**256.
+    Generalizes compute_hsdir_index_uniformity's parse_hex_index. Handles a
+    leading 0x/0X and treats missing/"None"/"nan"/blank as NaN. Python ints
+    are unbounded, so the 256-bit hex parses exactly; the division is done
+    in float, which is fine for the [0,1] uniformity work here.
+    """
+    def conv(val):
+        if val is None:
+            return np.nan
+        s = str(val).strip()
+        if s in ('', 'None', 'nan', 'NaN'):
+            return np.nan
+        if s[:2] in ('0x', '0X'):
+            s = s[2:]
+        try:
+            return float(int(s, 16)) / TWO_POW_256
+        except (ValueError, TypeError):
+            return np.nan
+    return series.apply(conv)
+
+
+def _hour_to_float(series):
+    """
+    Shared hour-parsing helper (factored out of the two v5 functions, which
+    each re-derived it). "HH:MM" -> HH + MM/60; a bare number -> that number;
+    anything unparseable -> 0.0. Vectorized, and per-value safe rather than
+    sniffing the dtype off row 0 as the v5 code did.
+    """
+    s = series.astype(str)
+    has_colon = s.str.contains(":", na=False)
+    out = pd.Series(0.0, index=s.index, dtype=float)
+
+    if has_colon.any():
+        parts = s[has_colon].str.split(":", expand=True)
+        hh = pd.to_numeric(parts[0], errors="coerce").fillna(0)
+        mm = pd.to_numeric(parts[1], errors="coerce").fillna(0) if parts.shape[1] > 1 else 0
+        out.loc[has_colon] = hh + mm / 60.0
+    if (~has_colon).any():
+        out.loc[~has_colon] = pd.to_numeric(s[~has_colon], errors="coerce").fillna(0.0)
+    return out
+
+
+def _prepare_uniformity_frame(df_slice, metric, dedupe_on_service_type=False):
+    """
+    Build the working frame for one metric: filter to valid entity+fingerprint
+    rows, drop ghost nodes (consecutive_hourly_absences > 1), normalize status
+    (STRICT: only ACTIVE_IN_RING is active), parse the hour, and derive the
+    normalized [0,1] `value` column from the metric's source (or fallback)
+    column. Returns None if the metric's source column is absent or nothing
+    usable remains.
+
+    `dedupe_on_service_type` only affects the entity key for the HSDir-index
+    metric's tracked service-type overlap case: it appends service_type to
+    the fingerprint entity so a relay serving N service types is counted once
+    per service type (matching the rule used in
+    daily_rotated_nodes_stability_distributions). It has no effect for the
+    onion-indexed metrics (a mapped_onion belongs to exactly one service type).
+    """
+    entity = metric["entity"]
+    value_col = metric["value_col"]
+    fallback_col = metric["fallback_col"]
+
+    if df_slice is None or df_slice.empty:
+        return None
+    if "fingerprint" not in df_slice.columns or entity not in df_slice.columns:
+        return None
+    if value_col not in df_slice.columns and (fallback_col is None or fallback_col not in df_slice.columns):
+        return None
+
+    df = df_slice.copy()
+
+    # Valid entity + fingerprint only.
+    df = df[(df[entity].notna()) & (df[entity] != 'None') &
+            (df['fingerprint'].notna()) & (df['fingerprint'] != 'None')]
+
+    # Ghost-node filter (consecutive_hourly_absences <= 1, NaN allowed).
+    if "consecutive_hourly_absences" in df.columns:
+        cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+        df = df[cha.isna() | (cha <= 1)]
+
+    if df.empty:
+        return None
+
+    # STRICT active convention, consistent with the rest of this module.
+    if "status" in df.columns:
+        df["clean_status"] = df["status"].fillna("ACTIVE_IN_RING").astype(str)
+    else:
+        df["clean_status"] = "ACTIVE_IN_RING"
+    df["_is_active"] = df["clean_status"] == "ACTIVE_IN_RING"
+
+    df["hour_num"] = _hour_to_float(df["hour"]) if "hour" in df.columns else 0.0
+
+    # Normalized [0,1] value.
+    if metric["kind"] == "hex_over_2pow256":
+        if value_col in df.columns:
+            df["value"] = _parse_hex_to_unit(df[value_col])
+        else:
+            df["value"] = np.nan
+        if df["value"].dropna().empty and fallback_col and fallback_col in df.columns:
+            df["value"] = pd.to_numeric(df[fallback_col], errors="coerce") / metric["fallback_divisor"]
+    else:  # raw_over_2pow256 (distance), with position fallback
+        if value_col in df.columns:
+            df["value"] = pd.to_numeric(df[value_col], errors="coerce") / TWO_POW_256
+        else:
+            df["value"] = np.nan
+        if df["value"].dropna().empty and fallback_col and fallback_col in df.columns:
+            df["value"] = pd.to_numeric(df[fallback_col], errors="coerce") / metric["fallback_divisor"]
+
+    df = df.dropna(subset=["value"])
+    if df.empty:
+        return None
+
+    # Entity key for churn/stats grouping.
+    if dedupe_on_service_type and entity == "fingerprint" and "service_type" in df.columns:
+        df["_entity_key"] = list(zip(df["fingerprint"], df["service_type"].astype(str)))
+    else:
+        df["_entity_key"] = df[entity]
+
+    return df
+
+
+def _vectorized_churn(df, entity_key_col="_entity_key"):
+    """
+    Vectorized per-(date, entity) churn, validated to reproduce the v5
+    nested-loop new/disappeared semantics exactly:
+      - "new"        = the first hour a fingerprint is seen active that day
+                       for that entity (not recounted on later reappearance);
+                       every active fp in the first observed hour is new.
+      - "disappeared"= active in the previous hour, not active this hour
+                       (counted each time it happens).
+    Returns a DataFrame with columns [date, entity_key_col, New HSDirs,
+    Disappeared HSDirs, Total Churn].
+    """
+    # (date, entity, fingerprint, hour) is active if ANY of its rows is active.
+    active_cell = (
+        df.groupby(["date", entity_key_col, "fingerprint", "hour_num"])["_is_active"]
+        .any()
+    )
+
+    rows = []
+    for (date, entity), sub in active_cell.groupby(level=[0, 1]):
+        mat = (
+            sub.reset_index(level=[0, 1], drop=True)
+            .unstack("hour_num")
+        )
+        mat = mat.reindex(sorted(mat.columns), axis=1).fillna(False).astype(bool)
+        arr = mat.values
+        n_hours = arr.shape[1]
+        if n_hours == 0:
+            rows.append((date, entity, 0, 0, 0))
+            continue
+
+        # NEW: active this hour AND not active in any strictly-previous hour.
+        seen_prev = np.zeros_like(arr, dtype=bool)
+        if n_hours > 1:
+            seen_prev[:, 1:] = np.maximum.accumulate(arr, axis=1)[:, :-1]
+        tot_new = int((arr & ~seen_prev).sum())
+
+        # DISAPPEARED: active previous hour, not active this hour.
+        tot_disappeared = int((arr[:, :-1] & ~arr[:, 1:]).sum()) if n_hours > 1 else 0
+
+        rows.append((date, entity, tot_new, tot_disappeared, tot_new + tot_disappeared))
+
+    return pd.DataFrame(rows, columns=["date", entity_key_col,
+                                       "New HSDirs", "Disappeared HSDirs", "Total Churn"])
+
+
+def _ks_uniformity(values):
+    """KS-test-based uniformity score against U(0,1): 1 - D. NaN if < 3 points."""
+    v = np.asarray(values, dtype=float)
+    if len(v) < 3:
+        return np.nan
+    ks_stat, _ = kstest(v, "uniform")
+    return 1.0 - ks_stat
+
+
+def _dispersion_points_table(df, entity_key_col="_entity_key", by_hour=False):
+    """
+    Per-onion mean/std of the normalized `value`, for the dispersion plot.
+
+    by_hour=False: one (entity, date) mean/std -- the normal per-day
+      trajectory used for long-lived onions (STATIC_CONTROL / THIRD_PARTY_PROBE),
+      which persist across days and so form a line day-to-day.
+
+    by_hour=True: one (entity, date, hour) mean/std, plus a "_t" ordinal that
+      lays every (date, hour) snapshot on a single chronological axis. Used
+      for EPHEMERAL_VARIABLE, where each onion lives a single day: aggregating
+      per day gives one point per onion (no line), so we instead resolve each
+      onion across the hourly snapshots of its day, giving it a real
+      multi-point trajectory that renders like the other service types.
+    """
+    keys = ["date", "hour", entity_key_col] if by_hour else ["date", entity_key_col]
+    grouped = df.groupby(keys)["value"]
+    tbl = grouped.agg(
+        mean_value="mean",
+        std_value=lambda s: s.std(ddof=0),
+    ).reset_index()
+    tbl["std_value"] = tbl["std_value"].fillna(0.0)
+
+    if by_hour:
+        # Ordinal position for each distinct (date, hour) in chronological order.
+        snaps = _chronological_snapshots(df)  # list of (date, hour)
+        order = {snap: i for i, snap in enumerate(snaps)}
+        tbl["_t"] = list(zip(tbl["date"], tbl["hour"]))
+        tbl["_t"] = tbl["_t"].map(order)
+        tbl = tbl.dropna(subset=["_t"]).sort_values("_t")
+    return tbl
+
+
+def _compute_uniformity_table(df, entity_key_col="_entity_key"):
+    """
+    Vectorized per-(date, entity) uniformity stats (mean/std/min/max/range +
+    KS uniformity score) over the normalized `value`, merged with vectorized
+    churn on (date, entity). Returns the combined per-(date, entity) table.
+    """
+    grouped = df.groupby(["date", entity_key_col])["value"]
+    stats = grouped.agg(
+        sample_count="count",
+        mean_value="mean",
+        std_value=lambda s: s.std(ddof=0),  # population std, matching np.std default
+        min_value="min",
+        max_value="max",
+    ).reset_index()
+    stats["range_value"] = stats["max_value"] - stats["min_value"]
+    stats["std_value"] = stats["std_value"].fillna(0.0)
+
+    ks = grouped.apply(_ks_uniformity).reset_index(name="uniformity_score")
+    stats = stats.merge(ks, on=["date", entity_key_col])
+
+    churn = _vectorized_churn(df, entity_key_col)
+    table = stats.merge(churn, on=["date", entity_key_col], how="left")
+    for c in ["New HSDirs", "Disappeared HSDirs", "Total Churn"]:
+        table[c] = table[c].fillna(0).astype(int)
+    return table
+
+
+def _plot_ecdf(ax, values, label, color):
+    """Draw one ECDF curve of `values` in [0,1] on `ax`."""
+    vals = np.sort(np.asarray(values, dtype=float))
+    if len(vals) == 0:
+        return
+    ecdf = np.arange(1, len(vals) + 1) / len(vals)
+    ax.plot(vals, ecdf, color=color, linewidth=2.0, label=label)
+
+
+def _save_ecdf_figure(dedup_values, output_path, title, value_label):
+    """Single-series ECDF vs ideal U(0,1)."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _plot_ecdf(ax, dedup_values, "Empirical CDF (ECDF)", "#2ca02c")
+    ax.plot([0, 1], [0, 1], color="gray", linestyle="--", linewidth=1.5, label="Ideal Uniform U(0,1)")
+    ax.set_title(title)
+    ax.set_xlabel(value_label)
+    ax.set_ylabel("Cumulative Probability")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _save_ecdf_overlay_figure(series_values, output_path, title, value_label):
+    """Overlay one ECDF per key in `series_values` = {label: values}."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i, (lbl, vals) in enumerate(series_values.items()):
+        _plot_ecdf(ax, vals, str(lbl), _series_color(lbl, i))
+    ax.plot([0, 1], [0, 1], color="gray", linestyle="--", linewidth=1.5, label="Ideal Uniform U(0,1)")
+    ax.set_title(title)
+    ax.set_xlabel(value_label)
+    ax.set_ylabel("Cumulative Probability")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+# Fixed, high-contrast colors per service type so the same service type is
+# always drawn in the same easily-distinguished color across every overlay
+# (the previous tab10 blue/orange/green were too close in the scatter overlay).
+_SERVICE_TYPE_COLORS = {
+    "STATIC_CONTROL": "#e41a1c",      # strong red
+    "EPHEMERAL_VARIABLE": "#377eb8",  # strong blue
+    "THIRD_PARTY_PROBE": "#4daf4a",   # strong green
+}
+_FALLBACK_COLORS = ["#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"]
+
+
+def _series_color(label, index):
+    """Contrasting color for a service-type (or other) series label."""
+    return _SERVICE_TYPE_COLORS.get(str(label), _FALLBACK_COLORS[index % len(_FALLBACK_COLORS)])
+
+
+def _save_churn_scatter_figure(tables_by_label, output_path, title):
+    """
+    Churn-vs-dispersion scatter. `tables_by_label` = {label: uniformity_table};
+    each contributes its (Total Churn, std_value) points in one contrasting
+    color, with a per-series linear trend line where there's enough spread.
+    """
+    fig, ax = plt.subplots(figsize=(12, 7))
+    for i, (lbl, table) in enumerate(tables_by_label.items()):
+        if table is None or table.empty:
+            continue
+        color = _series_color(lbl, i)
+        x = table["Total Churn"].values
+        y = table["std_value"].fillna(0).values
+        ax.scatter(x, y, color=color, alpha=0.6, edgecolors="none", s=40, label=str(lbl))
+        if len(table) > 1 and pd.Series(x).nunique() > 1:
+            z = np.polyfit(x, y, 1)
+            p = np.poly1d(z)
+            xs = np.linspace(x.min(), x.max(), 100)
+            ax.plot(xs, p(xs), color=color, linestyle="--", linewidth=1.8,
+                    label=f"{lbl} trend (slope={z[0]:.4f})")
+    ax.set_title(title)
+    ax.set_xlabel("Daily Total Churn (New + Disappeared HSDirs)")
+    ax.set_ylabel(r"Value Std Dev ($\sigma$)")
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _save_dispersion_figure(df, entity_key_col, output_path, title, value_label,
+                            by_hour=False):
+    """
+    Per-onion dispersion plot, v5 "_onion_distance_uniformity" style: for each
+    onion, a mean line plus a shaded +/-1 std band (mean line in the Dark2
+    palette, band in YlOrRd). One line per onion.
+
+    `df` is the prepared per-row frame (has date/hour/value/_entity_key). The
+    x-axis is built explicitly from an ordered list of time slots and every
+    onion is drawn against those same integer positions, so days sort
+    chronologically ("Day 2" before "Day 10", not lexicographically) and all
+    onions share one consistent axis.
+
+    by_hour=False (default): x = chronological "Day N"; each onion contributes
+      one point per day. Long-lived onions (STATIC_CONTROL / THIRD_PARTY_PROBE)
+      persist across days, so they render as connected multi-day lines.
+
+    by_hour=True: x = chronological (date, hour) snapshots; each onion
+      contributes one point per hourly snapshot. Used for EPHEMERAL_VARIABLE,
+      whose onions each live a single day -- resolving them by hour gives each
+      a real multi-point line within its day instead of a single dot, so the
+      plot looks like the other service types rather than empty vertical bands.
+    """
+    tbl = _dispersion_points_table(df, entity_key_col, by_hour=by_hour)
+
+    if by_hour:
+        slots = _chronological_snapshots(df)          # ordered (date, hour)
+        pos = {snap: i for i, snap in enumerate(slots)}
+        tbl = tbl.assign(_x=list(zip(tbl["date"], tbl["hour"])))
+        tbl["_x"] = tbl["_x"].map(pos)
+        # One tick per day, at that day's first snapshot.
+        tick_pos, tick_lab, seen = [], [], set()
+        for i, (d, _h) in enumerate(slots):
+            if d not in seen:
+                seen.add(d)
+                tick_pos.append(i)
+                tick_lab.append(d)
+    else:
+        slots = _chronological_days(df)               # ordered "Day N"
+        pos = {d: i for i, d in enumerate(slots)}
+        tbl = tbl.assign(_x=tbl["date"].map(pos))
+        tick_pos, tick_lab = list(range(len(slots))), slots
+
+    fig, ax = plt.subplots(figsize=(15, 8))
+    entities = list(pd.unique(tbl[entity_key_col]))
+    avg_colors = plt.cm.Dark2(np.linspace(0.0, 1.0, max(1, len(entities))))
+    warm_colors = plt.cm.YlOrRd(np.linspace(0.5, 0.9, max(1, len(entities))))
+    for idx, ent in enumerate(entities):
+        sub = tbl[tbl[entity_key_col] == ent].sort_values("_x")
+        x = sub["_x"].values
+        m = sub["mean_value"].values
+        s = sub["std_value"].values
+        ax.plot(x, m, linestyle="-", color=avg_colors[idx % len(avg_colors)],
+                alpha=0.8, linewidth=1.5)
+        ax.fill_between(x, np.maximum(0, m - s), np.minimum(1, m + s),
+                        color=warm_colors[idx % len(warm_colors)], alpha=0.15)
+
+    legend_elements = [
+        Line2D([0], [0], color="black", linestyle="-", label="Mean Relative Ring Distance"),
+        Line2D([0], [0], color="orange", linestyle="--", label="±1 Std Dev Dispersion (Shaded)"),
+    ]
+    ax.legend(handles=legend_elements, loc="upper right")
+
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lab, rotation=45)
+    ax.set_title(title)
+    ax.set_xlabel("Observation Timeline")
+    ax.set_ylabel(value_label)
+    ax.set_ylim(-0.05, 1.05)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _run_one_metric(df, metric_key, context_label):
+    """Compute + plot one metric for one context. Returns the per-(date,entity) table or None."""
+    metric = _UNIFORMITY_METRICS[metric_key]
+    if context_label not in metric["valid_contexts"]:
+        return None
+
+    out_dir = metric["output_dir"]
+    entity = metric["entity"]
+    value_label = metric["value_label"]
+    metric_title = metric["metric_title"]
+
+    # --- General case (any valid context) ---
+    prepared = _prepare_uniformity_frame(df, metric, dedupe_on_service_type=False)
+    if prepared is None:
+        print(f"[UNIFORMITY-INFO] No usable data for metric '{metric_key}' — {context_label}; skipping.")
+        return None
+
+    table = _compute_uniformity_table(prepared)
+    if table.empty:
+        print(f"[UNIFORMITY-INFO] No uniformity records for metric '{metric_key}' — {context_label}; skipping.")
+        return None
+
+    # ECDF over the deduped-per-entity value population (dedupe per day+entity
+    # so repeated hourly rows of one entity don't over-weight the curve).
+    dedup_vals = prepared.drop_duplicates(subset=["date", "_entity_key", "fingerprint"])["value"].values
+    _save_ecdf_figure(
+        dedup_vals,
+        os.path.join(out_dir, f"{context_label}_distance_uniformity_ecdf.png"),
+        title=f"ECDF of {metric_title} vs Uniformity — {context_label}",
+        value_label=value_label,
+    )
+    _save_churn_scatter_figure(
+        {context_label: table},
+        os.path.join(out_dir, f"{context_label}_churn_vs_distance_dispersion.png"),
+        title=f"{metric_title}: daily churn vs dispersion — {context_label}",
+    )
+    # General per-onion dispersion plot (v5 "_onion_distance_uniformity" style):
+    # one mean±std line per onion across days. Only meaningful for the two
+    # onion-indexed metrics (entity == mapped_onion); the HSDir-ring-index
+    # metric groups by fingerprint, for which a "per-onion" dispersion plot
+    # is undefined, so it is skipped there.
+    if entity == "mapped_onion":
+        _save_dispersion_figure(
+            prepared, "_entity_key",
+            os.path.join(out_dir, f"{context_label}_onion_distance_uniformity.png"),
+            title=(f"Tor v3 Daily HSDir {metric_title} Uniformity & Dispersion per Onion Service\n"
+                   f"Segment: {context_label.replace('_', ' ').title()}"),
+            value_label=value_label,
+        )
+
+    # --- Tracked-only service-type breakdowns ---
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ('None', '')
+        )
+
+        # For the HSDir-index metric, the combined overlay dedupes on
+        # (fingerprint, service_type) so a relay serving multiple service
+        # types is counted once per service type.
+        dedupe_st = (entity == "fingerprint")
+
+        overlay_ecdf_series = {}
+        overlay_scatter_tables = {}
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            sub_prepared = _prepare_uniformity_frame(sub, metric, dedupe_on_service_type=dedupe_st)
+            if sub_prepared is None:
+                continue
+            sub_table = _compute_uniformity_table(sub_prepared)
+            if sub_table.empty:
+                continue
+
+            st_vals = sub_prepared.drop_duplicates(
+                subset=["date", "_entity_key", "fingerprint"]
+            )["value"].values
+            overlay_ecdf_series[st] = st_vals
+            overlay_scatter_tables[st] = sub_table
+
+            st_lower = st.lower()
+
+            # Per-service-type ECDF (its own real ECDF, matching the filename).
+            _save_ecdf_figure(
+                st_vals,
+                os.path.join(out_dir, f"{st_lower}_distance_uniformity_ecdf.png"),
+                title=f"ECDF of {metric_title} vs Uniformity — {st}",
+                value_label=value_label,
+            )
+
+            # Per-service-type churn-vs-dispersion scatter, for EVERY metric
+            # (previously only produced for the onion-indexed metrics).
+            _save_churn_scatter_figure(
+                {st: sub_table},
+                os.path.join(out_dir, f"{st_lower}_churn_vs_distance_dispersion.png"),
+                title=f"{metric_title}: churn vs dispersion — {st}",
+            )
+
+            # Per-service-type per-onion dispersion breakdown (onion-indexed
+            # metrics only — grouping fingerprints into a per-onion dispersion
+            # plot isn't meaningful for the HSDir-ring-index metric).
+            # EPHEMERAL_VARIABLE onions each live one day, so resolve them by
+            # hourly snapshot (by_hour=True) to give each a real within-day
+            # line; long-lived service types use the per-day trajectory.
+            if entity == "mapped_onion":
+                _save_dispersion_figure(
+                    sub_prepared, "_entity_key",
+                    os.path.join(out_dir, f"{st_lower}_onion_distance_uniformity.png"),
+                    title=(f"Tor v3 Daily HSDir {metric_title} Uniformity & Dispersion per Onion Service\n"
+                           f"Segment: {context_label.replace('_', ' ').title()} {st.replace('_', ' ').title()}"),
+                    value_label=value_label,
+                    by_hour=(st == "EPHEMERAL_VARIABLE"),
+                )
+
+        if overlay_ecdf_series:
+            _save_ecdf_overlay_figure(
+                overlay_ecdf_series,
+                os.path.join(out_dir, "service_types_distance_uniformity_ecdf.png"),
+                title=f"{metric_title}: ECDF by service type — {context_label}",
+                value_label=value_label,
+            )
+        if overlay_scatter_tables:
+            _save_churn_scatter_figure(
+                overlay_scatter_tables,
+                os.path.join(out_dir, "service_types_churn_vs_distance_dispersion.png"),
+                title=f"{metric_title}: churn vs dispersion by service type — {context_label}",
+            )
+
+    return table
+
+
+def hrt_uniformity_distributions(df, context_label):
+    """
+    Unified ring-position uniformity + churn analysis, replacing the v5
+    compute_onion_to_hsdir_uniformity / compute_hsdir_index_uniformity pair
+    (and the never-written onion-index variant) with one vectorized function.
+
+    Computes, for each ring-position metric valid in `context_label`, the
+    per-day uniformity statistic family (mean/std/min/max/range + KS-based
+    uniformity score against U(0,1)) and daily HSDir churn (new/disappeared),
+    then saves an ECDF plot and a churn-vs-dispersion scatter. For the
+    "tracked" context it additionally saves service-type ECDF/scatter
+    overlays and, for the onion-indexed metrics, per-service-type per-onion
+    dispersion breakdowns (with the special EPHEMERAL_VARIABLE daily-pooled
+    rendering).
+
+    Metric -> (source column, per-day entity, valid contexts, output dir):
+      * onion_to_hsdir : hsdir_to_onion_ring_distance (fallback ...position),
+                         per mapped_onion, tracked only,
+                         analysis-results/uniformity/onion_to_hsdir
+      * hsdir_index    : hsdir_index_hrt_hex (fallback ..._100),
+                         per fingerprint, tracked + network,
+                         analysis-results/uniformity/hsdir_index
+      * onion_index    : mapped_onion_index_hex, per mapped_onion, tracked only,
+                         analysis-results/uniformity/onion_index
+
+    Calling this with context_label == "network" simply skips the two
+    onion-indexed metrics (their source columns don't exist there) and runs
+    only the HSDir-index metric. Metrics/days/service types with too few
+    points for a stable KS test (< 3) yield a NaN uniformity score rather
+    than erroring.
+    """
+
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+
+    if df is None or df.empty:
+        print(f"[UNIFORMITY-ERROR] Missing data slice for context '{context_label}'.")
+        return
+
+    print(f"\n[UNIFORMITY] Ring-position uniformity analysis — {context_label}")
+    for metric_key in _UNIFORMITY_METRICS:
+        _run_one_metric(df, metric_key, context_label)
+
+
+# ---------------------------------------------------------------------------
+# DHT ring-index coverage analysis (hsdir_index_hrt_hex / mapped_onion_index_hex)
+#
+# Companion to hrt_uniformity_distributions: instead of how *uniformly* the
+# observed ring indexes are spread, this measures how much of the ring space
+# is actually *occupied* by them -- overall, per day, and per service type.
+#
+# Coverage definition (resolved modeling choice, see HRT_COVERAGE_BUCKETS):
+#   The literal "occupied fraction of the 2^256 ring" is degenerate at this
+#   dataset's scale -- a few dozen-to-hundreds of exact points out of 2^256
+#   is ~10^-62, far below float precision, so it always prints as 0.0 and
+#   carries zero research signal. Instead we discretize the [0,1]-normalized
+#   ring (the same _parse_hex_to_unit values the uniformity function uses)
+#   into HRT_COVERAGE_BUCKETS equal-width buckets and define:
+#       coverage % = (buckets containing >=1 observed index) / total buckets.
+#   The bucket count is an explicit, tunable modeling parameter -- the
+#   reported percentages are coverage *at this resolution*, NOT an absolute
+#   ring-occupancy figure, and the plot/print labels say so.
+# ---------------------------------------------------------------------------
+
+# Number of equal-width buckets the normalized [0,1] ring is discretized into
+# for coverage. Chosen as a fixed, moderate constant: with this dataset's
+# scale (dozens to low hundreds of distinct indexes per day, ~1-2k across the
+# month) 10,000 buckets keeps per-day coverage well away from both 0% (which
+# a 2^256-scale exact count would always give) and 100% (which too few
+# buckets would trivially give), so the number actually moves with the data.
+# Tune here if a different resolution is wanted; every coverage % scales with it.
+HRT_COVERAGE_BUCKETS = 10_000
+
+# Metrics this coverage analysis applies to: only the two hex ring-INDEX
+# metrics. onion_to_hsdir is a relative distance, not a ring position, so
+# "DHT coverage" is undefined for it and it is excluded.
+_COVERAGE_METRIC_KEYS = ("hsdir_index", "onion_index")
+
+
+def _indexes_to_buckets(values, n_buckets=HRT_COVERAGE_BUCKETS):
+    """
+    Map normalized [0,1] ring values to integer bucket ids in [0, n_buckets-1].
+    A value of exactly 1.0 would land in bucket n_buckets, so it's clamped
+    into the last bucket. Returns a numpy int array.
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return np.empty(0, dtype=int)
+    buckets = np.floor(arr * n_buckets).astype(int)
+    np.clip(buckets, 0, n_buckets - 1, out=buckets)
+    return buckets
+
+
+def _day_covered_buckets(day_df, by_hour=False, n_buckets=HRT_COVERAGE_BUCKETS):
+    """
+    Set of covered bucket ids for a single day's prepared rows.
+
+    by_hour=False (default, all non-ephemeral cases): the day's covered set is
+      just the set of buckets over every observed index that day. Order and
+      repetition are irrelevant -- a set can't double-count -- so this
+      naturally realizes the "union over the day" semantics.
+
+    by_hour=True (EPHEMERAL_VARIABLE): buckets are accumulated across the day's
+      hourly snapshots in chronological order, adding an entity's index only
+      the FIRST hour that entity is observed that day (mirroring
+      _vectorized_churn's "new" = first-appearance rule). A later-hour
+      reappearance of the same entity -- even if its index has since changed
+      across an HRT rotation -- is not re-processed, so the day's set is the
+      incremental union of first-seen indexes, not of all hourly values.
+    """
+    if not by_hour:
+        return set(_indexes_to_buckets(day_df["value"].values, n_buckets).tolist())
+
+    covered = set()
+    seen_entities = set()
+    # Chronological hour order within this day.
+    hours = sorted(day_df["hour_num"].dropna().unique())
+    for hr in hours:
+        hr_slice = day_df[day_df["hour_num"] == hr]
+        # First-appearance only: skip entities already counted earlier today.
+        fresh = hr_slice[~hr_slice["_entity_key"].isin(seen_entities)]
+        if not fresh.empty:
+            covered.update(_indexes_to_buckets(fresh["value"].values, n_buckets).tolist())
+            seen_entities.update(fresh["_entity_key"].tolist())
+    return covered
+
+
+def _daily_coverage_series(prepared, days, by_hour=False, n_buckets=HRT_COVERAGE_BUCKETS):
+    """
+    Per-day coverage fraction (covered buckets that day / n_buckets), aligned
+    to `days`. A day absent from the data (or with zero observed indexes)
+    yields 0.0 rather than a gap or a divide-by-zero.
+    """
+    fractions = []
+    grouped = {d: sub for d, sub in prepared.groupby("date")}
+    for d in days:
+        sub = grouped.get(d)
+        if sub is None or sub.empty:
+            fractions.append(0.0)
+            continue
+        covered = _day_covered_buckets(sub, by_hour=by_hour, n_buckets=n_buckets)
+        fractions.append(len(covered) / n_buckets)
+    return fractions
+
+
+def _overall_coverage(prepared, by_hour=False, n_buckets=HRT_COVERAGE_BUCKETS):
+    """
+    Whole-period coverage fraction: union of covered buckets across all days
+    (each day built under the same by_hour rule) / n_buckets.
+    """
+    covered = set()
+    for _d, sub in prepared.groupby("date"):
+        covered |= _day_covered_buckets(sub, by_hour=by_hour, n_buckets=n_buckets)
+    return len(covered) / n_buckets
+
+
+def _dedup_prepared(prepared):
+    """
+    Dedup to one row per (day, entity, fingerprint), consistent with how
+    hrt_uniformity_distributions dedups before bucketing/plotting, so repeated
+    hourly rows of one entity don't distort coverage. Keeps date/hour/hour_num/
+    value/_entity_key/fingerprint/service_type needed downstream.
+    """
+    return prepared.drop_duplicates(subset=["date", "_entity_key", "fingerprint", "hour"])
+
+
+def _plot_coverage_diverging(days, coverage_fractions, output_path, title):
+    """
+    Single-series diverging coverage plot: coverage as a positive solid blue
+    line, uncovered share (1 - coverage) as a negative solid red line, per day.
+    """
+    x = list(range(len(days)))
+    uncovered = [-(1.0 - c) for c in coverage_fractions]
+
+    fig, ax = plt.subplots(figsize=(max(11, len(days) * 0.6), 6))
+    ax.plot(x, coverage_fractions, color="blue", linestyle="-", marker="o", label="Coverage")
+    ax.plot(x, uncovered, color="red", linestyle="-", marker="o", label="Uncovered share")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(days, rotation=45)
+    ax.set_xlabel("Day")
+    ax.set_ylabel(f"Fraction of {HRT_COVERAGE_BUCKETS} ring buckets\n(covered positive / uncovered negative)")
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_title(title)
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _plot_coverage_overlay(days, series_fractions, output_path, title, show_legend=True):
+    """
+    Combined diverging coverage plot for multiple labeled series (service types
+    or onions). `series_fractions` = {label: coverage_fraction_list}. Each
+    series' coverage is drawn in a clearer shade of its color and its uncovered
+    share (negative) in a darker shade of the same hue.
+
+    show_legend=False suppresses the per-series legend, used for the per-onion
+    breakdown where dozens of onions would otherwise bury the plot under a
+    legend larger than the axes (the aggregate spread pattern is the point
+    there, not identifying each individual onion).
+    """
+    x = list(range(len(days)))
+    fig, ax = plt.subplots(figsize=(max(12, len(days) * 0.7), 7))
+
+    for i, (label, cov) in enumerate(series_fractions.items()):
+        base = _series_color(label, i)
+        rgb = np.array(mcolors.to_rgb(base))
+        light = tuple(rgb + (1.0 - rgb) * 0.45)   # clearer/lighter shade -> coverage
+        dark = tuple(rgb * 0.55)                   # darker shade of same hue -> uncovered
+        uncovered = [-(1.0 - c) for c in cov]
+        cov_label = f"{label} (coverage)" if show_legend else None
+        unc_label = f"{label} (uncovered)" if show_legend else None
+        ax.plot(x, cov, color=light, linestyle="-", marker="o", markersize=3, label=cov_label)
+        ax.plot(x, uncovered, color=dark, linestyle="-", marker="o", markersize=3, label=unc_label)
+
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(days, rotation=45)
+    ax.set_xlabel("Day")
+    ax.set_ylabel(f"Fraction of {HRT_COVERAGE_BUCKETS} ring buckets\n(covered positive / uncovered negative)")
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_title(title)
+    if show_legend:
+        ax.legend(loc="upper right", fontsize=7, ncol=2)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _run_one_coverage_metric(df, metric_key, context_label):
+    """Compute + print + plot ring-index coverage for one metric in one context."""
+    metric = _UNIFORMITY_METRICS[metric_key]
+    if context_label not in metric["valid_contexts"]:
+        return
+
+    out_dir = metric["output_dir"]
+    metric_title = metric["metric_title"]
+
+    prepared = _prepare_uniformity_frame(df, metric, dedupe_on_service_type=False)
+    if prepared is None:
+        print(f"[COVERAGE-INFO] No usable data for metric '{metric_key}' — {context_label}; skipping.")
+        return
+    prepared = _dedup_prepared(prepared)
+    days = _chronological_days(prepared)
+
+    # --- General case (steps 1-3) ---
+    overall = _overall_coverage(prepared)
+    daily = _daily_coverage_series(prepared, days)
+    daily_avg = (sum(daily) / len(daily)) if daily else 0.0
+
+    print(f"\n[COVERAGE] {metric_title} ring coverage — {context_label} "
+          f"(resolution: {HRT_COVERAGE_BUCKETS} buckets)")
+    print(f"    Overall month-wide coverage (all days pooled): {overall:.4%}")
+    print(f"    Daily-average coverage (mean of per-day coverage): {daily_avg:.4%}")
+
+    _plot_coverage_diverging(
+        days, daily,
+        os.path.join(out_dir, f"{context_label}_daily_hrt_coverage.png"),
+        title=(f"{metric_title}: daily DHT ring coverage — {context_label}\n"
+               f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
+    )
+
+    # --- Tracked-only: per-service-type (steps 5-6) ---
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ('None', '')
+        )
+        # HSDir-index overlap rule: a relay serving multiple service types is
+        # bucketed once per service type (dedupe_on_service_type=True); onion
+        # index has no such overlap (an onion belongs to one service type).
+        dedupe_st = (metric["entity"] == "fingerprint")
+
+        overlay = {}
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            sub_prepared = _prepare_uniformity_frame(sub, metric, dedupe_on_service_type=dedupe_st)
+            if sub_prepared is None:
+                continue
+            sub_prepared = _dedup_prepared(sub_prepared)
+            # EPHEMERAL_VARIABLE: accumulate a day's buckets across its hourly
+            # snapshots, first-appearance only (see _day_covered_buckets).
+            by_hour = (st == "EPHEMERAL_VARIABLE")
+
+            st_overall = _overall_coverage(sub_prepared, by_hour=by_hour)
+            st_daily = _daily_coverage_series(sub_prepared, days, by_hour=by_hour)
+            st_avg = (sum(st_daily) / len(st_daily)) if st_daily else 0.0
+            overlay[st] = st_daily
+
+            print(f"    [{st}] overall: {st_overall:.4%}  |  daily-average: {st_avg:.4%}")
+
+        # One combined overlay figure per metric (step 5).
+        if overlay:
+            _plot_coverage_overlay(
+                days, overlay,
+                os.path.join(out_dir, "service_types_daily_hrt_coverage.png"),
+                title=(f"{metric_title}: daily DHT ring coverage by service type — {context_label}\n"
+                       f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
+            )
+
+        # Per-service-type, per-onion breakdown (step 6) — hsdir_index only.
+        # For each service type, one figure with a coverage/uncoverage line
+        # pair per mapped_onion: bucket the hsdir_index values of the HSDirs
+        # responsible for that onion ("how spread on the ring are this onion's
+        # HSDirs" — a sybil-clustering signal). Dropped for onion_index by
+        # design (an onion's own index is ~one value per rotation, so per-onion
+        # coverage would be near-empty).
+        if metric_key == "hsdir_index":
+            for st in service_types:
+                sub = df[df["service_type"] == st]
+                # Reuse the onion_to_hsdir metric spec to get a per-mapped_onion
+                # frame, but bucket the HSDIR index, not the distance: prepare
+                # with hsdir_index (fingerprint entity) yet keep mapped_onion.
+                sub_prepared = _prepare_uniformity_frame(sub, metric, dedupe_on_service_type=False)
+                if sub_prepared is None or "mapped_onion" not in sub_prepared.columns:
+                    continue
+                sub_prepared = _dedup_prepared(sub_prepared)
+                by_hour = (st == "EPHEMERAL_VARIABLE")
+
+                onion_series = {}
+                for onion, onion_df in sub_prepared.groupby("mapped_onion"):
+                    if onion in ('None', '') or onion_df.empty:
+                        continue
+                    onion_series[onion] = _daily_coverage_series(
+                        onion_df, days, by_hour=by_hour
+                    )
+                if not onion_series:
+                    continue
+                _plot_coverage_overlay(
+                    days, onion_series,
+                    os.path.join(out_dir, f"{st.lower()}_onion_daily_hrt_coverage.png"),
+                    title=(f"{metric_title}: per-onion HSDir ring coverage — {st}\n"
+                           f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
+                    show_legend=False,
+                )
+
+
+def hrt_index_coverage_distributions(df, context_label):
+    """
+    DHT ring-index coverage analysis for the two hex ring-index metrics
+    (hsdir_index_hrt_hex for network+tracked, mapped_onion_index_hex for
+    tracked only). Companion to hrt_uniformity_distributions.
+
+    For each applicable metric it prints the overall month-wide coverage and
+    the daily-average coverage (two distinct figures), saves a per-day
+    diverging coverage/uncoverage plot, and -- under "tracked" -- per
+    service-type coverage plus a combined service-type overlay, and (for
+    hsdir_index only) a per-service-type per-onion coverage breakdown.
+
+    "Coverage" is the fraction of HRT_COVERAGE_BUCKETS equal-width buckets of
+    the normalized [0,1] ring that contain at least one observed index; it is
+    a resolution-dependent modeling quantity, not an absolute 2^256-ring
+    occupancy (which is ~0 at this scale). See HRT_COVERAGE_BUCKETS.
+    """
+    if df is None or df.empty:
+        print(f"[COVERAGE-ERROR] Missing data slice for context '{context_label}'.")
+        return
+
+    df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
+
+    print(f"\n[COVERAGE] DHT ring-index coverage analysis — {context_label}")
+    for metric_key in _COVERAGE_METRIC_KEYS:
+        _run_one_coverage_metric(df, metric_key, context_label)
+
+
+# ---------------------------------------------------------------------------
+# HSDir new/disappeared/reconnected churn analysis
+#
+# Classifies each entity's per-(date, hour) transition against the
+# immediately preceding chronological snapshot into exactly one of:
+#   * new          - first-ever appearance in the whole observation window
+#   * reconnected  - present now, absent last snapshot, but seen at some
+#                    earlier point in the window (any earlier day or hour)
+#   * disappeared  - present last snapshot, absent now
+#
+# Unlike every other function in this file, this one deliberately does NOT
+# use `status` at all: activity is defined purely by row presence after a
+# stricter ghost filter (consecutive_hourly_absences == 0, not <= 1), since
+# the state machine needs a strict "was this entity actually in this
+# consensus" signal rather than "not yet ghosted".
+# ---------------------------------------------------------------------------
+
+def _stripped_flag_counts(df, dedupe_on_service_type=False):
+    """
+    Per-(date, hour) count of distinct entities observed with
+    status == "STRIPPED_HSDIR_FLAG" at consecutive_hourly_absences == 1 that
+    snapshot -- a diagnostic breakdown of "just lost its HSDir flag", not a
+    fourth churn category disjoint from the other three (see
+    _churn_state_machine's docstring for why it overlaps disappeared).
+
+    Filter (confirmed, resolving a gap in the task doc's literal filter
+    text): (consecutive_hourly_absences.isna() |
+    (consecutive_hourly_absences == 1)) AND status == "STRIPPED_HSDIR_FLAG".
+    The status condition is required even though the literal "== 1" filter
+    text alone doesn't encode it -- without it, any node with exactly one
+    recorded absence for an unrelated reason (e.g. OFFLINE_CHURN) would be
+    misread as a stripped-flag event. This is a DIFFERENT strictness level
+    than _churn_state_machine's own "== 0" presence filter -- both are
+    needed simultaneously (0 absences to detect who's actually present;
+    exactly 1 absence to detect who just got flagged), not one replacing
+    the other.
+
+    Entities are keyed the same way as _churn_state_machine: (fingerprint,
+    service_type) under the tracked overlap rule when dedupe_on_service_type
+    is set, else fingerprint alone.
+
+    Returns a DataFrame with columns [date, hour, stripped_count], one row
+    per (date, hour) that had at least one qualifying event -- snapshots
+    with none simply don't appear here; the caller fills those with 0 on
+    merge, since a snapshot with no stripped events is a real, valid zero.
+    Returns an empty frame (same columns) if consecutive_hourly_absences,
+    status, or fingerprint is missing from `df`.
+    """
+    empty = pd.DataFrame(columns=["date", "hour", "stripped_count"])
+    if df is None or df.empty or "consecutive_hourly_absences" not in df.columns \
+            or "status" not in df.columns or "fingerprint" not in df.columns:
+        return empty
+
+    cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+    mask = (cha.isna() | (cha == 1)) & (df["status"].astype(str) == "STRIPPED_HSDIR_FLAG")
+    stripped = df[mask].copy()
+    if stripped.empty:
+        return empty
+
+    if dedupe_on_service_type and "service_type" in stripped.columns:
+        stripped["_entity_key"] = list(zip(stripped["fingerprint"], stripped["service_type"].astype(str)))
+    else:
+        stripped["_entity_key"] = stripped["fingerprint"]
+
+    return (
+        stripped.groupby(["date", "hour"])["_entity_key"]
+        .nunique()
+        .reset_index(name="stripped_count")
+    )
+
+
+def _churn_state_machine(df, dedupe_on_service_type=False):
+    """
+    Walk _chronological_snapshots(df) in order and classify every entity's
+    per-snapshot transition into new / disappeared / reconnected, relative
+    to the immediately preceding snapshot (never resetting at day
+    boundaries -- a node continuously active across midnight is neither new
+    nor disappeared there).
+
+    State carried across the ENTIRE walk (never reset):
+      * prev_entities: the set of entities present in the previous snapshot
+        (starts empty) -- used for the disappeared/still-active transition.
+      * ever_seen: the set of every entity ever observed so far (starts
+        empty, only ever grows) -- used for the new-vs-reconnected split.
+
+    For each snapshot: appeared = current - prev_entities; of those,
+    appeared - ever_seen are "new" (truly first-ever) and appeared &
+    ever_seen are "reconnected" (seen before, at any earlier point).
+    disappeared = prev_entities - current. The very first snapshot needs no
+    special case: prev_entities and ever_seen both start empty, so every
+    entity present there is automatically "new" and nothing is
+    "disappeared"/"reconnected" -- exactly the spec's resolution for the
+    first-snapshot edge case falls out of the walk on its own.
+
+    Rate denominators are type-specific: new/reconnected rates divide by
+    the CURRENT snapshot's total entity count (share of today's population
+    that just joined/came back); disappeared rate divides by the PREVIOUS
+    snapshot's total (share of that prior population no longer present).
+    All three rates are returned as plain non-negative fractions -- the
+    "negative for disappeared/reconnected" convention from the spec is a
+    plotting choice, applied only when building the rate plot, not stored
+    here, so the printed/aggregated numbers stay unambiguous positive rates.
+
+    A fourth column pair, stripped_count/stripped_rate, is merged on from
+    _stripped_flag_counts (a differently-filtered pass -- see that helper's
+    docstring) by (date, hour): missing snapshots become 0 (a real zero, not
+    missing data), and stripped_rate = stripped_count / prev_total (0 where
+    prev_total is 0) -- reusing this same table's own prev_total, exactly
+    mirroring disappeared_rate's formula, rather than tracking a second
+    population source. stripped is a diagnostic SUBSET of disappeared
+    (a stripped-flag node is typically also disappeared under the stricter
+    "==0" filter this function itself uses), not a mutually exclusive
+    category -- the two are expected to overlap.
+
+    `dedupe_on_service_type=True` keys entities on (fingerprint,
+    service_type) instead of fingerprint alone -- the same overlap rule
+    `_prepare_uniformity_frame` uses -- so a node serving multiple service
+    types is tracked once per service type it serves, for the combined
+    "tracked" (all service types) run. Not needed for "network" or for a
+    single-service-type subset, where it's a no-op.
+
+    Returns a DataFrame, one row per (date, hour) in chronological order,
+    with columns: date, hour, new_count, disappeared_count,
+    reconnected_count, stripped_count, new_rate, disappeared_rate,
+    reconnected_rate, stripped_rate, current_total, prev_total.
+    """
+    empty_cols = ["date", "hour", "new_count", "disappeared_count", "reconnected_count",
+                  "stripped_count", "new_rate", "disappeared_rate", "reconnected_rate",
+                  "stripped_rate", "current_total", "prev_total"]
+    if df is None or df.empty or "consecutive_hourly_absences" not in df.columns \
+            or "fingerprint" not in df.columns:
+        return pd.DataFrame(columns=empty_cols)
+
+    snapshots = _chronological_snapshots(df)
+    if not snapshots:
+        return pd.DataFrame(columns=empty_cols)
+
+    # Strict presence filter (point 0.3): only rows with zero consecutive
+    # hourly absences count as "actually in this consensus", NOT the looser
+    # <=1 ghost tolerance used elsewhere in this file. NaN (no data) is kept,
+    # consistent with every other ghost filter's NaN handling.
+    cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+    working = df[cha.isna() | (cha == 0)].copy()
+
+    if dedupe_on_service_type and "service_type" in working.columns:
+        working["_entity_key"] = list(zip(working["fingerprint"], working["service_type"].astype(str)))
+    else:
+        working["_entity_key"] = working["fingerprint"]
+
+    entity_sets = (
+        working.groupby(["date", "hour"])["_entity_key"].apply(set).to_dict()
+        if not working.empty else {}
+    )
+
+    rows = []
+    prev_entities = set()
+    ever_seen = set()
+    for snap in snapshots:
+        current_entities = entity_sets.get(snap, set())
+
+        appeared = current_entities - prev_entities
+        new_entities = appeared - ever_seen
+        reconnected_entities = appeared & ever_seen
+        disappeared_entities = prev_entities - current_entities
+
+        current_total = len(current_entities)
+        prev_total = len(prev_entities)
+
+        new_count = len(new_entities)
+        reconnected_count = len(reconnected_entities)
+        disappeared_count = len(disappeared_entities)
+
+        rows.append({
+            "date": snap[0], "hour": snap[1],
+            "new_count": new_count,
+            "disappeared_count": disappeared_count,
+            "reconnected_count": reconnected_count,
+            "new_rate": (new_count / current_total) if current_total else 0.0,
+            "disappeared_rate": (disappeared_count / prev_total) if prev_total else 0.0,
+            "reconnected_rate": (reconnected_count / current_total) if current_total else 0.0,
+            "current_total": current_total,
+            "prev_total": prev_total,
         })
 
-    df_daily_matrix = pd.DataFrame(computed_daily_metrics)
-    if df_daily_matrix.empty:
-        print(f"[RARE-ERROR] Core metric matrix is empty for context: {context_label}")
+        ever_seen |= current_entities
+        prev_entities = current_entities
+
+    df_states = pd.DataFrame(rows)
+
+    # Merge the stripped-flag pass by (date, hour); snapshots with no
+    # qualifying event get stripped_count = 0 (a real zero).
+    stripped_df = _stripped_flag_counts(df, dedupe_on_service_type)
+    df_states = df_states.merge(stripped_df, on=["date", "hour"], how="left")
+    df_states["stripped_count"] = df_states["stripped_count"].fillna(0).astype(int)
+    df_states["stripped_rate"] = np.where(
+        df_states["prev_total"] > 0,
+        df_states["stripped_count"] / df_states["prev_total"].replace(0, np.nan),
+        0.0,
+    )
+    df_states["stripped_rate"] = df_states["stripped_rate"].fillna(0.0)
+
+    return df_states
+
+
+# Fixed colors for the three churn types, via the shared _series_color
+# palette, so "new"/"disappeared"/"reconnected" are always the same color
+# across the count and rate plots (and across every context/service type).
+_CHURN_TYPE_COLORS = {
+    "new": _series_color("new", 0),
+    "disappeared": _series_color("disappeared", 1),
+    "reconnected": _series_color("reconnected", 2),
+    # Explicit purple, not the _series_color fallback (index 3 there would be
+    # pink) -- also deliberately a different purple from "new"'s fallback
+    # shade (#984ea3, itself an orchid/purple) so the two stay visually
+    # distinct when plotted together.
+    "stripped": "#4B0082",
+}
+
+
+def _churn_day_tick_positions(df_states, max_labels=15):
+    """
+    One x tick per day, at that day's first snapshot -- same pattern as
+    _plot_entity_drops_series's x-axis -- but thinned to at most
+    `max_labels` evenly-spaced day labels. Without this, a full month at
+    hourly cadence would try to cram 30 rotated labels into a compact
+    figure and they'd overlap into an unreadable smear.
+    """
+    day_first_index = {}
+    for i, date in enumerate(df_states["date"]):
+        if date not in day_first_index:
+            day_first_index[date] = i
+    days = list(day_first_index.keys())
+    positions = list(day_first_index.values())
+    if len(days) > max_labels:
+        step = -(-len(days) // max_labels)  # ceil division, no import needed
+        days = days[::step]
+        positions = positions[::step]
+    return positions, days
+
+
+def _plot_churn_counts(df_states, output_path, title):
+    """
+    Four solid lines (new/disappeared/reconnected/stripped), all plotted as
+    plain absolute counts (none negated -- unlike the rate plot, this is not
+    a diverging chart). X-axis: every (date, hour) snapshot in chronological
+    order, with day-only tick labels.
+
+    stripped is a diagnostic breakdown of disappeared (nodes stripped of
+    their HSDir flag specifically), not a mutually exclusive fourth
+    category -- its line typically sits at or below the disappeared line at
+    any given snapshot, which is the expected shape, not double-counting.
+
+    Figure size is FIXED regardless of how many (date, hour) snapshots are
+    plotted -- it does not grow with the data, the same compact look
+    whether this is 11 days or a full month at hourly cadence (a plain
+    thin line, no per-point markers, is legible at any density; a
+    width that scales with point count is not).
+    """
+    x = list(range(len(df_states)))
+    fig, ax = plt.subplots(figsize=(12, 4.5))
+    ax.plot(x, df_states["new_count"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["new"], label="New")
+    ax.plot(x, df_states["disappeared_count"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["disappeared"], label="Disappeared")
+    ax.plot(x, df_states["reconnected_count"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["reconnected"], label="Reconnected")
+    ax.plot(x, df_states["stripped_count"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["stripped"], label="Stripped HSDir flag")
+
+    tick_pos, tick_lab = _churn_day_tick_positions(df_states)
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lab, rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Entity count")
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _plot_churn_rates(df_states, output_path, title):
+    """
+    Same x-axis/line structure as the count plot, but diverging: new rate
+    positive, disappeared/reconnected/stripped rates negated (plotted below
+    zero). stripped is negated alongside disappeared because it is itself a
+    leave-type event (a diagnostic breakdown of disappeared, not a distinct
+    join/leave direction). The stored rate values themselves stay positive
+    (see _churn_state_machine) -- negation happens only here, at plot time.
+
+    Same fixed-figure-size, marker-free, thinned-tick-label treatment as
+    _plot_churn_counts, for the same reason (compact regardless of a
+    month's worth of hourly snapshots).
+    """
+    x = list(range(len(df_states)))
+    fig, ax = plt.subplots(figsize=(12, 4.5))
+    ax.plot(x, df_states["new_rate"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["new"], label="New rate")
+    ax.plot(x, -df_states["disappeared_rate"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["disappeared"], label="Disappeared rate")
+    ax.plot(x, -df_states["reconnected_rate"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["reconnected"], label="Reconnected rate")
+    ax.plot(x, -df_states["stripped_rate"], linestyle="-", linewidth=1.0,
+            color=_CHURN_TYPE_COLORS["stripped"], label="Stripped HSDir flag rate")
+    ax.axhline(0, color="black", linewidth=0.8)
+
+    tick_pos, tick_lab = _churn_day_tick_positions(df_states)
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lab, rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Rate (new: ÷ current total; disappeared/stripped: ÷ previous total;\nreconnected: ÷ current total)")
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _print_churn_summary(df_states, label):
+    """
+    Per type (new/disappeared/reconnected/stripped), print all four
+    aggregate figures, clearly labeled so hourly and daily, and count and
+    rate, are never confused with one another:
+      * avg count/hour = sum of that type's count across every (date,hour)
+        row / number of (date,hour) rows.
+      * avg rate/hour  = same, using rate instead of count.
+      * avg count/day  = first sum each day's hourly counts into one daily
+        total (not a per-day average -- counts have no upper bound, so a
+        "how many total that day" sum is meaningful), then average those
+        daily totals across days.
+      * avg rate/day   = first AVERAGE each day's hourly rates into one
+        daily mean rate (not a sum -- rates are already bounded fractions
+        of a population, so summing several together can run past 100%
+        and stops meaning "a rate"), then average those daily means
+        across days. Both steps are plain averages, so the final number
+        stays a proper rate.
+
+    stripped is a diagnostic subset of disappeared (see
+    _churn_state_machine), so its printed figures are expected to run at or
+    below disappeared's -- not evidence of an error.
+    """
+    n_snapshots = len(df_states)
+    if n_snapshots == 0:
+        print(f"[CHURN-INFO] No snapshots to summarize for {label}.")
+        return
+
+    daily_counts = df_states.groupby("date")[
+        ["new_count", "disappeared_count", "reconnected_count", "stripped_count"]
+    ].sum()
+    daily_rates = df_states.groupby("date")[
+        ["new_rate", "disappeared_rate", "reconnected_rate", "stripped_rate"]
+    ].mean()
+    n_days = len(daily_counts) if len(daily_counts) else 1
+
+    print(f"\n[CHURN] {label} — per-snapshot summary ({n_snapshots} snapshots, {n_days} days)")
+    for kind, count_col, rate_col in (
+        ("new", "new_count", "new_rate"),
+        ("disappeared", "disappeared_count", "disappeared_rate"),
+        ("reconnected", "reconnected_count", "reconnected_rate"),
+        ("stripped", "stripped_count", "stripped_rate"),
+    ):
+        avg_hour_count = df_states[count_col].sum() / n_snapshots
+        avg_hour_rate = df_states[rate_col].sum() / n_snapshots
+        avg_day_count = daily_counts[count_col].sum() / n_days
+        avg_day_rate = daily_rates[rate_col].sum() / n_days
+        print(f"    [{kind}] avg count/hour: {avg_hour_count:.4f}   avg rate/hour: {avg_hour_rate:.4%}   "
+              f"avg count/day: {avg_day_count:.4f}   avg rate/day: {avg_day_rate:.4%}")
+
+
+def hsdir_churn_distributions(df, context_label):
+    """
+    New/disappeared/reconnected/stripped-HSDir-flag churn analysis. For `df`
+    (network-wide or tracked, post-validate_sort_data shape) and
+    context_label ("network" or "tracked"): classifies every entity's
+    transition at each (date, hour) snapshot (relative to the immediately
+    preceding snapshot, never resetting at day boundaries), prints the four
+    aggregate figures per type, and saves a counts plot and a rates plot to
+    analysis-results/churn/.
+
+    context_label == "tracked" additionally repeats the whole analysis once
+    per distinct service_type (each already single-service-type, so no
+    overlap-dedupe needed there), saving
+    {service_type_lower}_churn_count_per_hour.png /
+    {service_type_lower}_churn_rate_per_hour.png.
+
+    Entity presence for new/disappeared/reconnected is decided purely by
+    consecutive_hourly_absences == 0 (a stricter filter than the usual <=1
+    ghost tolerance elsewhere in this file) and does not use status. The
+    stripped-HSDir-flag signal is a separate, differently-filtered pass
+    (consecutive_hourly_absences == 1 AND status == "STRIPPED_HSDIR_FLAG",
+    see _stripped_flag_counts) merged onto the same table -- see
+    _churn_state_machine for how the two filters coexist.
+    """
+    base_dir = os.path.join("analysis-results", "churn")
+
+    if df is None or df.empty:
+        print(f"[CHURN-ERROR] Missing data slice for context '{context_label}'.")
+        return
+    if "consecutive_hourly_absences" not in df.columns or "fingerprint" not in df.columns:
+        print(f"[CHURN-INFO] Required columns missing for {context_label}; skipping.")
+        return
+
+    # Combined "tracked" (all service types) run applies the overlap-dedupe
+    # rule; "network" has no service_type at all, so it's a no-op there.
+    dedupe_st = (context_label == "tracked")
+    df_states = _churn_state_machine(df, dedupe_on_service_type=dedupe_st)
+    if df_states.empty:
+        print(f"[CHURN-INFO] No snapshots to analyze for {context_label}; skipping.")
+        return
+
+    _print_churn_summary(df_states, context_label)
+    _plot_churn_counts(
+        df_states, os.path.join(base_dir, f"{context_label}_churn_count_per_hour.png"),
+        title=f"HSDir churn — counts per snapshot — {context_label}",
+    )
+    _plot_churn_rates(
+        df_states, os.path.join(base_dir, f"{context_label}_churn_rate_per_hour.png"),
+        title=f"HSDir churn — rates per snapshot — {context_label}",
+    )
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            if sub.empty:
+                print(f"[CHURN-INFO] No rows for service_type '{st}'; skipping.")
+                continue
+            sub_states = _churn_state_machine(sub, dedupe_on_service_type=False)
+            if sub_states.empty:
+                print(f"[CHURN-INFO] No snapshots to analyze for service_type '{st}'; skipping.")
+                continue
+
+            label = f"tracked — {st}"
+            _print_churn_summary(sub_states, label)
+            st_lower = st.lower()
+            _plot_churn_counts(
+                sub_states, os.path.join(base_dir, f"{st_lower}_churn_count_per_hour.png"),
+                title=f"HSDir churn — counts per snapshot — {st}",
+            )
+            _plot_churn_rates(
+                sub_states, os.path.join(base_dir, f"{st_lower}_churn_rate_per_hour.png"),
+                title=f"HSDir churn — rates per snapshot — {st}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Uptime-matrix and hourly-uptime-duration analysis
+#
+# Two complementary views of relay/HSDir online-offline behavior over the
+# observation window:
+#   * hsdir_uptime_distributions        -- entity x snapshot online/offline
+#     bitmap, in two variants: a plain first-appearance-ordered matrix and a
+#     similarity-clustered matrix that groups entities with correlated uptime
+#     sequences and flags near-identical runs.
+#   * hsdir_hourly_uptime_distributions -- per-day uptime-duration statistics
+#     (average + 85/50/15 percentiles) in decimal hours.
+# ---------------------------------------------------------------------------
+
+def _uptime_entity_key(df, dedupe_on_service_type):
+    """
+    Entity key Series for the uptime analyses: the same overlap rule
+    _prepare_uniformity_frame uses -- (fingerprint, service_type) tuples when
+    dedupe_on_service_type is set and service_type exists (so a relay serving
+    N service types is one column per service type), else fingerprint alone.
+    """
+    if dedupe_on_service_type and "service_type" in df.columns:
+        return list(zip(df["fingerprint"], df["service_type"].astype(str)))
+    return df["fingerprint"]
+
+
+def _apply_ghost_filter(df):
+    """Standard file-wide ghost filter: keep rows with consecutive_hourly_absences
+    NaN or <= 1 (NOT the stricter == 0 used only by the churn analysis)."""
+    if "consecutive_hourly_absences" not in df.columns:
+        return df
+    cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+    return df[cha.isna() | (cha <= 1)]
+
+
+def _build_uptime_matrix(df, dedupe_on_service_type):
+    """
+    Build the snapshot x entity uptime matrix shared by both matrix variants,
+    over the FULL entity universe (every entity ever seen across the window --
+    the union), with three distinct cell states so that "not in this consensus
+    at all" is never conflated with "present but offline":
+
+        0 = OFFLINE : entity appears in that consensus but not ACTIVE_IN_RING
+        1 = ACTIVE  : entity has an ACTIVE_IN_RING row in that consensus
+        2 = ABSENT  : entity has no row at all in that consensus (not listed --
+                      e.g. not born yet, already gone, or otherwise omitted)
+
+    Earlier designs collapsed ABSENT into OFFLINE (both white), which made a
+    growing entity set look like a meaningless online/offline pattern (a
+    relay that simply did not exist yet read as "offline" for every prior
+    row). Keeping ABSENT as its own state lets the renderer color it
+    distinctly (see _render_uptime_matrix) so the genuine online/offline
+    signal of the relays actually in each consensus stays legible.
+
+    Returns (state_matrix, active_matrix, entities, snapshots):
+      * state_matrix : int array (n_snapshots, n_entities) with values 0/1/2
+                       as above -- drives rendering.
+      * active_matrix: int array (n_snapshots, n_entities), 1 iff ACTIVE else 0
+                       (ABSENT and OFFLINE both -> 0) -- the binary uptime
+                       sequence used for correlation clustering and
+                       identical-run detection, where the meaningful axis is
+                       simply "was this entity actively in the ring or not."
+      * entities     : union entity keys in first-appearance chronological
+                       order (column order for the status-only variant).
+      * snapshots    : (date, hour) pairs in chronological order (row order).
+    """
+    work = df.copy()
+    work["_entity_key"] = _uptime_entity_key(work, dedupe_on_service_type)
+    work["_is_active"] = (work["status"].astype(str) == "ACTIVE_IN_RING") \
+        if "status" in work.columns else True
+
+    snapshots = _chronological_snapshots(work)
+    snap_index = {snap: i for i, snap in enumerate(snapshots)}
+    work = work.assign(_snap_pos=list(zip(work["date"], work["hour"])))
+    work["_snap_pos"] = work["_snap_pos"].map(snap_index)
+
+    # Full union, first-appearance column order.
+    work_sorted = work.sort_values("_snap_pos", kind="stable")
+    entities = list(dict.fromkeys(work_sorted["_entity_key"].tolist()))
+    entity_index = {e: j for j, e in enumerate(entities)}
+
+    n_snap, n_ent = len(snapshots), len(entities)
+    # Start everything ABSENT (2); mark presence, then activity.
+    state = np.full((n_snap, n_ent), 2, dtype=int)
+
+    rows_all = work["_snap_pos"].to_numpy()
+    cols_all = work["_entity_key"].map(entity_index).to_numpy()
+    valid_all = ~pd.isna(rows_all) & ~pd.isna(cols_all)
+    ra = rows_all[valid_all].astype(int)
+    ca = cols_all[valid_all].astype(int)
+    # Present (row exists) -> at least OFFLINE (0).
+    state[ra, ca] = 0
+
+    act = work[work["_is_active"]]
+    ract = act["_snap_pos"].to_numpy()
+    cact = act["_entity_key"].map(entity_index).to_numpy()
+    valid_act = ~pd.isna(ract) & ~pd.isna(cact)
+    if valid_act.any():
+        state[ract[valid_act].astype(int), cact[valid_act].astype(int)] = 1
+
+    active_matrix = (state == 1).astype(int)
+    return state, active_matrix, entities, snapshots
+
+
+def _correlation_distance_order(matrix):
+    """
+    Column order from single-linkage hierarchical clustering on a
+    (1 - Pearson r) distance between entities' uptime sequences.
+
+    matrix is (n_snapshots, n_entities); correlation is between columns.
+    numpy.corrcoef gives r for all non-constant columns; constant columns
+    (zero variance -- always-on or always-off all month) yield NaN there and
+    are patched per the resolved three-case split:
+      * both constant, same value        -> r = 1  (identical behavior)  -> d 0
+      * both constant, opposite values   -> r = -1 (exact complements)   -> d 2
+      * one constant, one variable       -> r = 0  (no info)             -> d 1
+    Returns a list of column indices (the dendrogram leaf order). For fewer
+    than 2 entities, returns the trivial order unchanged.
+    """
+    n = matrix.shape[1]
+    if n < 2:
+        return list(range(n))
+
+    col_var = matrix.var(axis=0)
+    constant_mask = col_var == 0
+    # Constant value per column (only meaningful where constant_mask): the
+    # single value that column holds (0 or 1); use the first row.
+    const_val = matrix[0, :] if matrix.shape[0] else np.zeros(n)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r = np.corrcoef(matrix, rowvar=False)
+    r = np.atleast_2d(r)
+
+    # Patch every pair involving at least one constant column.
+    ci = np.where(constant_mask)[0]
+    for i in ci:
+        for j in range(n):
+            if i == j:
+                r[i, j] = 1.0
+                continue
+            if constant_mask[j]:
+                # both constant: same value -> 1, opposite -> -1
+                r[i, j] = 1.0 if const_val[i] == const_val[j] else -1.0
+            else:
+                # one constant, one variable: no information
+                r[i, j] = 0.0
+            r[j, i] = r[i, j]
+    np.fill_diagonal(r, 1.0)
+    # Any residual NaN (shouldn't remain) -> neutral.
+    r = np.nan_to_num(r, nan=0.0)
+
+    dist = 1.0 - r
+    np.fill_diagonal(dist, 0.0)
+    dist = np.clip(dist, 0.0, 2.0)
+    # Enforce exact symmetry for squareform.
+    dist = (dist + dist.T) / 2.0
+    np.fill_diagonal(dist, 0.0)
+
+    condensed = squareform(dist, checks=False)
+    if condensed.size == 0:
+        return list(range(n))
+    Z = linkage(condensed, method="single")
+    return list(leaves_list(Z))
+
+
+def _identical_run_mask(matrix_ordered, min_run=5):
+    """
+    Boolean array over ordered columns: True where a column belongs to a run
+    of `min_run` or more ADJACENT columns whose full binary sequence (all
+    rows) is exactly identical. Used to recolor those columns solid red.
+    """
+    n = matrix_ordered.shape[1]
+    flagged = np.zeros(n, dtype=bool)
+    if n == 0:
+        return flagged
+    run_start = 0
+    for j in range(1, n + 1):
+        same = (j < n) and np.array_equal(matrix_ordered[:, j], matrix_ordered[:, run_start])
+        if not same:
+            if j - run_start >= min_run:
+                flagged[run_start:j] = True
+            run_start = j
+    return flagged
+
+
+def _render_uptime_matrix(matrix, output_path, title, red_mask=None):
+    """
+    Render a snapshot x entity uptime matrix as an RGB bitmap from the
+    three-state values produced by _build_uptime_matrix:
+        1 (ACTIVE)  -> black
+        0 (OFFLINE) -> white   (present in the consensus but not active)
+        2 (ABSENT)  -> purple  (not listed in that consensus at all -- a
+                                distinct state, so a not-yet-born / already-gone
+                                relay is never mistaken for a real offline one)
+    Columns in red_mask (if given) are recolored solid red across all rows
+    (identical-uptime blocks). Rows = snapshots (earliest at top).
+    """
+    n_snap, n_ent = matrix.shape
+    ABSENT_COLOR = (0.55, 0.20, 0.75)  # high-contrast purple vs black/white/red
+
+    rgb = np.ones((max(n_snap, 1), max(n_ent, 1), 3), dtype=float)  # default white = OFFLINE
+    if n_snap and n_ent:
+        rgb[matrix == 1] = (0.0, 0.0, 0.0)        # ACTIVE -> black
+        rgb[matrix == 2] = ABSENT_COLOR           # ABSENT -> purple
+        if red_mask is not None and red_mask.any():
+            rgb[:, red_mask, :] = (1.0, 0.0, 0.0)  # identical-run -> red
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.imshow(rgb, aspect="auto", interpolation="nearest", origin="upper")
+    ax.set_title(title)
+    ax.set_xlabel("Entities (columns)")
+    ax.set_ylabel("Consensuses (rows, earliest at top)")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    legend_handles = [
+        Patch(facecolor="black", label="Active (in ring)"),
+        Patch(facecolor="white", edgecolor="gray", label="Offline (in consensus, not active)"),
+        Patch(facecolor=ABSENT_COLOR, label="Absent (not in consensus)"),
+    ]
+    if red_mask is not None and red_mask.any():
+        legend_handles.append(Patch(facecolor="red", label="Identical-uptime block (≥5)"))
+    ax.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8)
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _uptime_matrix_for_slice(df, dedupe_on_service_type, out_dir, name_prefix, label):
+    """Build + render both matrix variants (status-only and clustered) for one
+    data slice (a whole context, or one service_type subset)."""
+    if df is None or df.empty:
+        print(f"[UPTIME-INFO] No data for {label}; skipping matrix.")
+        return
+    state_matrix, active_matrix, entities, snapshots = _build_uptime_matrix(df, dedupe_on_service_type)
+    if state_matrix.shape[1] == 0 or state_matrix.shape[0] == 0:
+        print(f"[UPTIME-INFO] Empty matrix for {label}; skipping.")
+        return
+
+    # 2a. Status-only, first-appearance column order (no clustering, no red).
+    _render_uptime_matrix(
+        state_matrix,
+        os.path.join(out_dir, f"{name_prefix}_uptime_matrix.png"),
+        title=f"Uptime matrix (status only) — {label}",
+        red_mask=None,
+    )
+
+    # 2b. Clustering uses the binary ACTIVE sequence (absent/offline both 0),
+    # then the SAME ordering is applied to the three-state matrix for render.
+    order = _correlation_distance_order(active_matrix)
+    state_ordered = state_matrix[:, order]
+    active_ordered = active_matrix[:, order]
+    red_mask = _identical_run_mask(active_ordered, min_run=5)
+    _render_uptime_matrix(
+        state_ordered,
+        os.path.join(out_dir, f"{name_prefix}_uptime_matrix_clustered.png"),
+        title=f"Uptime matrix (uptime-similarity clustered) — {label}",
+        red_mask=red_mask,
+    )
+
+
+def hsdir_uptime_distributions(df, context_label):
+    """
+    Entity x snapshot uptime-matrix visualization. For `df` (network-wide or
+    tracked, post-validate_sort_data shape) and context_label ("network" or
+    "tracked"), produces two matrix figures under analysis-results/uptime/:
+
+      * {context_label}_uptime_matrix.png           -- plain status-only bitmap
+        (black = active, white = inactive), columns in first-appearance order,
+        no statistical processing.
+      * {context_label}_uptime_matrix_clustered.png -- columns reordered by
+        single-linkage clustering on a (1 - Pearson r) uptime-sequence
+        distance, with runs of >=5 adjacent identical-sequence columns
+        recolored solid red.
+
+    For context_label == "tracked", entities follow the (fingerprint,
+    service_type) overlap rule, and both figures are additionally produced per
+    service_type ({service_type_lower}_uptime_matrix[_clustered].png).
+    """
+    if df is None or df.empty:
+        print(f"[UPTIME-ERROR] Missing data slice for context '{context_label}'.")
+        return
+    if "fingerprint" not in df.columns:
+        print(f"[UPTIME-INFO] No fingerprint column for {context_label}; skipping.")
+        return
+
+    out_dir = os.path.join("analysis-results", "uptime")
+    df = _apply_ghost_filter(df)
+    dedupe_st = (context_label == "tracked")
+
+    print(f"\n[UPTIME] Uptime-matrix analysis — {context_label}")
+    _uptime_matrix_for_slice(df, dedupe_st, out_dir, context_label, context_label)
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            # Within a single service type the (fingerprint, service_type) key
+            # collapses to fingerprint anyway; keep dedupe on for consistency.
+            _uptime_matrix_for_slice(sub, True, out_dir, st.lower(), f"tracked — {st}")
+
+
+# ---------------------------------------------------------------------------
+# Hourly uptime durations
+# ---------------------------------------------------------------------------
+
+def _entity_day_durations(day_df, day_hours=None):
+    """
+    All uptime-duration values (decimal hours) for one entity on one day.
+
+    Walks that entity's consensus rows in chronological hour order. A duration
+    opens at the first ACTIVE_IN_RING hour and closes at the first subsequent
+    hour where status is no longer ACTIVE_IN_RING (duration = that offline
+    hour - the open hour). A later reconnection opens a NEW duration. If the
+    entity stays ACTIVE_IN_RING from its first appearance through the day's
+    last row with no offline event, that stretch's duration is
+    last_active_hour - first_active_hour. Day boundaries are hard resets:
+    this only ever sees one day's rows, so nothing crosses midnight.
+
+    Zero-span-stretch rule: whenever a stretch would close with zero span --
+    i.e. a single ACTIVE_IN_RING consensus with no offline row after it, which
+    happens both for a relay seen exactly once all day AND for a reconnection
+    that opens on the day's last row -- that 0 understates a relay that was
+    demonstrably up for (at least) one consensus interval. Instead its
+    duration is (next consensus hour that day) - (open hour), where "next
+    consensus" is the snapshot immediately after the open hour in that day's
+    actual consensus timeline (`day_hours`, which may be spaced 1h, 2h, etc. --
+    the real cadence, not an assumed step). If the open hour is the day's very
+    last consensus there is no next consensus to measure to; the duration is
+    then floored to 1.0 rather than 0.0 (minimum-risk: it was online once).
+
+    `day_hours` is the sorted list of that day's distinct consensus decimal
+    hours; when omitted, a zero-span stretch falls back to the 1.0 floor.
+    """
+    rows = day_df.sort_values("_hour_num", kind="stable")
+    hours = rows["_hour_num"].to_numpy()
+    active = (rows["status"].astype(str) == "ACTIVE_IN_RING").to_numpy() \
+        if "status" in rows.columns else np.ones(len(rows), dtype=bool)
+
+    durations = []
+    open_hour = None
+    last_active_hour = None
+    for h, a in zip(hours, active):
+        if a:
+            if open_hour is None:
+                open_hour = h
+            last_active_hour = h
+        else:
+            if open_hour is not None:
+                durations.append(h - open_hour)
+                open_hour = None
+    # Still open at end of the entity's rows.
+    if open_hour is not None:
+        span = last_active_hour - open_hour
+        # Zero-span final stretch: the stretch is a single active consensus
+        # with no offline row after it -- either the relay's only appearance
+        # all day, or a reconnection that opened on the day's last row. Measure
+        # to the next consensus in the day's timeline; if the open hour is the
+        # day's LAST consensus there is no next consensus, so floor to 1.0
+        # rather than 0.0, since the relay was demonstrably online for (at
+        # least) that one consensus -- a deliberate minimum-risk floor for the
+        # otherwise-unmeasurable case. (A stretch with span > 0 already spans
+        # real consensuses and is left exactly as measured.)
+        if span == 0:
+            later = [hh for hh in day_hours if hh > open_hour] if day_hours else []
+            span = (later[0] - open_hour) if later else 1.0
+        durations.append(span)
+    return durations
+
+
+def _pooled_daily_durations(df, dedupe_on_service_type):
+    """
+    {day -> list of all uptime durations} pooling every entity's every
+    duration that day (the flat pool used for the per-day average and
+    percentiles). Entities keyed by the overlap rule.
+    """
+    work = df.copy()
+    work["_entity_key"] = _uptime_entity_key(work, dedupe_on_service_type)
+    work["_hour_num"] = _hour_to_float(work["hour"])
+
+    out = {}
+    for day, day_df in work.groupby("date"):
+        day_hours = sorted(day_df["_hour_num"].dropna().unique().tolist())
+        pooled = []
+        for _ent, ent_df in day_df.groupby("_entity_key"):
+            pooled.extend(_entity_day_durations(ent_df, day_hours))
+        out[day] = pooled
+    return out
+
+
+def _plot_hourly_uptimes(days, avg, p85, p50, p15, output_path, title):
+    """Four-series per-day uptime-duration plot with the specified styling."""
+    x = list(range(len(days)))
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(x, avg, linestyle="-", marker="o", color=_series_color("average", 0), label="Daily average")
+    ax.plot(x, p85, linestyle=":", marker="s", color=_series_color("p85", 1), label="85th percentile")
+    ax.plot(x, p50, linestyle="--", marker="^", color=_series_color("p50", 2), label="50th percentile (median)")
+    ax.plot(x, p15, linestyle="-.", marker="d", color=_series_color("p15", 3), label="15th percentile")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(days, rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Uptime duration (decimal hours)")
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _hourly_uptimes_for_slice(df, dedupe_on_service_type, out_dir, name_prefix, label):
+    """Compute per-day avg + percentiles from a flat duration pool, plot, and
+    print the across-day mean of daily averages. Returns that mean (or None)."""
+    if df is None or df.empty:
+        print(f"[UPTIME-INFO] No data for {label}; skipping hourly uptimes.")
         return None
+    daily = _pooled_daily_durations(df, dedupe_on_service_type)
+    days = _chronological_days(df)
 
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_daily_matrix["Observation Date"], df_daily_matrix["Rare Behaviour Count"], marker='o', color='magenta', linewidth=2, label='Rare Behaviour HSDir Count')
-    
-    for x, y in zip(df_daily_matrix["Observation Date"], df_daily_matrix["Rare Behaviour Count"]):
-        plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-        
-    plt.title(f"Tor v3 Unique HSDirs with Rare Behavior Anomaly ({context_label.replace('_', ' ').title()} - Daily)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Unique Relay Count (Fingerprints)")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    plt.savefig(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_daily_progression.png")
-    plt.close()
+    avg, p85, p50, p15 = [], [], [], []
+    for d in days:
+        vals = daily.get(d, [])
+        if vals:
+            arr = np.asarray(vals, dtype=float)
+            avg.append(float(arr.mean()))
+            p85.append(float(np.percentile(arr, 85)))
+            p50.append(float(np.percentile(arr, 50)))
+            p15.append(float(np.percentile(arr, 15)))
+        else:
+            avg.append(0.0); p85.append(0.0); p50.append(0.0); p15.append(0.0)
 
-    df_weekly_prep = df_daily_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Total Unique HSDirs": "mean",
-        "Rare Behaviour Count": "mean"
-    }).reset_index()
-    
-    df_weekly_matrix["Rare Behaviour Ratio (%)"] = (df_weekly_matrix["Rare Behaviour Count"] / df_weekly_matrix["Total Unique HSDirs"] * 100).round(2)
-    df_weekly_matrix["Total Unique HSDirs"] = df_weekly_matrix["Total Unique HSDirs"].round(2)
-    df_weekly_matrix["Rare Behaviour Count"] = df_weekly_matrix["Rare Behaviour Count"].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
+    _plot_hourly_uptimes(
+        days, avg, p85, p50, p15,
+        os.path.join(out_dir, f"{name_prefix}_hourly_uptimes.png"),
+        title=f"Daily uptime durations — {label}",
+    )
 
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Rare Behaviour Count"], marker='s', color='darkred', linewidth=2, label='Weekly Avg Rare Behavior HSDirs')
-        
-        for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix["Rare Behaviour Count"]):
-            plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-            
-        plt.title(f"Tor v3 Weekly Averaged Rare Behavior HSDir Profile ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Identity Instance Volume")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        plt.savefig(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_weekly_progression.png")
-        plt.close()
+    overall = float(np.mean(avg)) if avg else 0.0
+    print(f"    [{label}] average uptime across all days: {overall:.4f} decimal hours")
+    return overall
 
-    daily_totals = {
-        "Observation Date": "Overall Average",
-        "Total Unique HSDirs": round(df_daily_matrix["Total Unique HSDirs"].mean(), 2),
-        "Rare Behaviour Count": round(df_daily_matrix["Rare Behaviour Count"].mean(), 2),
-        "Rare Behaviour Ratio (%)": round(df_daily_matrix["Rare Behaviour Ratio (%)"].mean(), 2)
+
+def _onion_nested_hourly_uptimes(df, out_dir, st_lower, label):
+    """
+    Per-service-type per-onion nested daily uptime: for each day, average
+    per-fingerprint durations WITHIN each onion first, then average those
+    per-onion averages across onions -> the day's value (so a many-HSDir
+    onion doesn't dominate a flat pool). Plots the same four series and
+    prints the across-day mean of that plotted daily value.
+    """
+    if df is None or df.empty:
+        print(f"[UPTIME-INFO] No data for {label}; skipping onion-nested hourly uptimes.")
+        return
+    if "mapped_onion" not in df.columns:
+        print(f"[UPTIME-INFO] No mapped_onion for {label}; skipping onion-nested version.")
+        return
+
+    work = df.copy()
+    work["_hour_num"] = _hour_to_float(work["hour"])
+    days = _chronological_days(work)
+
+    # Per (day, onion): the onion's per-fingerprint duration averages, and the
+    # onion's daily average. Then per day we take avg/percentiles over the set
+    # of per-onion daily averages. "Next consensus" for the single-appearance
+    # rule is a day-level timeline, so derive each day's consensus hours from
+    # the whole day's rows, not the onion subset.
+    day_hours_map = {
+        day: sorted(day_df["_hour_num"].dropna().unique().tolist())
+        for day, day_df in work.groupby("date")
     }
-    df_daily_export = pd.concat([df_daily_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_daily_export.to_csv(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_daily_matrix.csv", index=False)
+    day_to_onion_avgs = {d: [] for d in days}
+    for (day, onion), grp in work.groupby(["date", "mapped_onion"]):
+        if onion in ("None", ""):
+            continue
+        day_hours = day_hours_map.get(day, [])
+        onion_durations = []
+        for _fp, fp_df in grp.groupby("fingerprint"):
+            onion_durations.extend(_entity_day_durations(fp_df, day_hours))
+        if onion_durations:
+            day_to_onion_avgs.setdefault(day, []).append(float(np.mean(onion_durations)))
 
-    if not df_weekly_matrix.empty:
-        weekly_totals = {
-            "Observation Week": "Overall Weekly Average",
-            "Total Unique HSDirs": round(df_weekly_matrix["Total Unique HSDirs"].mean(), 2),
-            "Rare Behaviour Count": round(df_weekly_matrix["Rare Behaviour Count"].mean(), 2),
-            "Rare Behaviour Ratio (%)": round(df_weekly_matrix["Rare Behaviour Ratio (%)"].mean(), 2)
-        }
-        df_weekly_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_export.to_csv(f"analysis-results/str_behave_ring_events/{context_label}_rare_behaviour_weekly_matrix.csv", index=False)
+    avg, p85, p50, p15 = [], [], [], []
+    for d in days:
+        vals = day_to_onion_avgs.get(d, [])
+        if vals:
+            arr = np.asarray(vals, dtype=float)
+            avg.append(float(arr.mean()))
+            p85.append(float(np.percentile(arr, 85)))
+            p50.append(float(np.percentile(arr, 50)))
+            p15.append(float(np.percentile(arr, 15)))
+        else:
+            avg.append(0.0); p85.append(0.0); p50.append(0.0); p15.append(0.0)
 
-    print(f"[RARE-INFO] Behavior analysis matrices successfully written for context: '{context_label}'")
-    return df_daily_matrix
+    _plot_hourly_uptimes(
+        days, avg, p85, p50, p15,
+        os.path.join(out_dir, f"{st_lower}_onion_hourly_uptimes.png"),
+        title=f"Daily uptime durations (per-onion nested average) — {label}",
+    )
+
+    overall = float(np.mean(avg)) if avg else 0.0
+    print(f"    [{label}] average of onion hour-uptime averages across all days: "
+          f"{overall:.4f} decimal hours")
 
 
-def calculate_rare_tracked_hsdir_behaviour_distributions(df, df_events, context_label):
-    print(f"PROCESSING {context_label.upper()} RARE BEHAVIOR ANOMALIES")
+def hsdir_hourly_uptime_distributions(df, context_label):
+    """
+    Per-day uptime-duration statistics (decimal hours) for relays/HSDirs. For
+    `df` and context_label ("network" or "tracked"): computes, per day, every
+    entity's uptime durations (open at first ACTIVE_IN_RING hour, close at the
+    next offline hour, reconnections start fresh durations, day boundaries are
+    hard resets), pools them, and plots the daily average plus the 85/50/15
+    percentiles to analysis-results/uptime/{context_label}_hourly_uptimes.png,
+    printing the across-day mean of the daily averages.
+
+    For context_label == "tracked": repeats per service_type (overlap-rule
+    entities) as {service_type_lower}_hourly_uptimes.png, and additionally
+    produces the per-onion nested version
+    ({service_type_lower}_onion_hourly_uptimes.png) where each day's value is
+    the average across onions of each onion's own per-fingerprint duration
+    average -- so onions with many HSDirs don't dominate.
+    """
     if df is None or df.empty:
-        print(f"[RARE-ERROR] Missing input data layout for context '{context_label}'.")
-        return None
-        
-    global_reporting_matrix = compute_rare_hsdir_behaviour_distribution(df, df_events, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating strange validation failures for hidden service type: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_rare_hsdir_behaviour_distribution(sub_population_df, df_events, segmented_label)
-                
-    return global_reporting_matrix
+        print(f"[UPTIME-ERROR] Missing data slice for context '{context_label}'.")
+        return
+    if "fingerprint" not in df.columns:
+        print(f"[UPTIME-INFO] No fingerprint column for {context_label}; skipping.")
+        return
+
+    out_dir = os.path.join("analysis-results", "uptime")
+    df = _apply_ghost_filter(df)
+    dedupe_st = (context_label == "tracked")
+
+    print(f"\n[UPTIME] Hourly uptime-duration analysis — {context_label}")
+    _hourly_uptimes_for_slice(df, dedupe_st, out_dir, context_label, context_label)
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        # General per-onion nested version across ALL service types combined,
+        # saved as tracked_onion_hourly_uptimes.png (the tracked-wide
+        # counterpart of the per-service-type onion-nested plots below).
+        _onion_nested_hourly_uptimes(df, out_dir, context_label, context_label)
+
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            st_lower = st.lower()
+            _hourly_uptimes_for_slice(sub, True, out_dir, st_lower, f"tracked — {st}")
+            _onion_nested_hourly_uptimes(sub, out_dir, st_lower, f"tracked — {st}")
 
 
-# ANALYSIS 10: RING ACTION DISTRIBUTIONS (DAILY & WEEKLY RESOLUTIONS)
-def compute_ring_action_distribution(df_slice, context_label):
-    
-    os.makedirs("analysis-results/ring_action_distributions", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
+# ---------------------------------------------------------------------------
+# Nickname-based distinct-value-change analyses
+#
+# Three deliverables that share one shape: group relays by nickname (the
+# operator-chosen, non-unique label), and for each nickname count how many
+# DISTINCT values of some other field it has shown across the whole
+# observation window -- fingerprint, declared_family_id, or IP address/
+# /24 subnet. A nickname cycling through many distinct fingerprints (or
+# family IDs, or addresses) is a signal worth surfacing on its own, distinct
+# from the sybil-distribution functions elsewhere in this file (which rank
+# groups by unique-fingerprint POPULATION, not by how many distinct values
+# of a field one identity has cycled through).
+# ---------------------------------------------------------------------------
 
-    if "action" not in df_slice.columns:
-        print(f"[ACTIONS-ERROR] Required field 'action' missing for context: {context_label}")
-        return None
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    unique_actions = sorted([str(a) for a in df_slice["action"].unique() if a not in ['None', 'nan', '']])
-    if not unique_actions:
-        print(f"[ACTIONS-WARNING] No valid unique actions discovered for context: {context_label}")
-        return None
-
-    for observation_day in unique_days_sorted:
-        day_data = df_slice[df_slice["date"] == observation_day]
-        
-        row = {"Observation Date": observation_day}
-        total_day_actions = 0
-        for action in unique_actions:
-            count = len(day_data[day_data["action"] == action])
-            row[action] = count
-            total_day_actions += count
-        row["Total Actions"] = total_day_actions
-        computed_metrics.append(row)
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[ACTIONS-ERROR] Summary matrix empty for context: {context_label}")
-        return None
-        
-    plt.figure(figsize=(14, 6))
-    colors = sns.color_palette("tab10", len(unique_actions))
-    for idx, action in enumerate(unique_actions):
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix[action], 
-                 marker='o', linewidth=2, label=f'{action} Count', color=colors[idx])
-        for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[action]):
-            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-    plt.title(f"Tor v3 Ring Actions Distribution ({context_label.replace('_', ' ').title()} - Daily Baseline)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Event Action Count")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    daily_fig_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_daily_progression.png"
-    plt.savefig(daily_fig_name)
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    agg_dict = {action: "mean" for action in unique_actions}
-    agg_dict["Total Actions"] = "mean"
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg(agg_dict).reset_index()
-    
-    for action in unique_actions:
-        df_weekly_matrix[action] = df_weekly_matrix[action].round(2)
-    df_weekly_matrix["Total Actions"] = df_weekly_matrix["Total Actions"].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        for idx, action in enumerate(unique_actions):
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix[action], 
-                     marker='s', linewidth=2, label=f'Weekly Avg {action}', color=colors[idx])
-            for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[action]):
-                plt.annotate(f"{y}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-                
-        plt.title(f"Tor v3 Weekly Averaged Ring Actions Profile ({context_label.replace('_', ' ').title()})")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Event Action Volume")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        weekly_fig_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_weekly_progression.png"
-        plt.savefig(weekly_fig_name)
-        plt.close()
-        
-        weekly_totals = {"Observation Week": "Overall Weekly Average"}
-        for action in unique_actions:
-            weekly_totals[action] = round(df_weekly_matrix[action].mean(), 2)
-        weekly_totals["Total Actions"] = round(df_weekly_matrix["Total Actions"].mean(), 2)
-        
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/ring_action_distributions/{context_label}_ring_actions_weekly_matrix.csv", index=False)
-
-    daily_totals = {"Observation Date": "Overall Average"}
-    for action in unique_actions:
-        daily_totals[action] = round(df_summary_matrix[action].mean(), 2)
-    daily_totals["Total Actions"] = round(df_summary_matrix["Total Actions"].mean(), 2)
-    
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    matrix_csv_name = f"analysis-results/ring_action_distributions/{context_label}_ring_actions_daily_matrix.csv"
-    df_summary_matrix_export.to_csv(matrix_csv_name, index=False)
-    
-    print(f"[ACTIONS-INFO] Daily and weekly ring actions analysis saved for context: '{context_label}'")
-    return df_summary_matrix
+# Cap the sorted-rank plot to the N highest-count entities (the original,
+# smaller-dataset design), or leave it uncapped and plot every entity. None =
+# uncapped (current default -- at full-month scale, entity counts land in
+# the same thousands-of-relays range the uncapped view was designed for).
+# To re-enable capping, set this to an integer, e.g. 1000.
+NICKNAME_CHANGES_RANK_PLOT_CAP = None
 
 
-def calculate_ring_action_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} RING ACTION DISTRIBUTIONS")
+def _nickname_entity_key(df, dedupe_on_service_type):
+    """
+    Entity key Series for the nickname-based "X changes" analyses: the same
+    overlap rule _uptime_entity_key/_prepare_uniformity_frame use, generalized
+    from fingerprint to nickname -- (nickname, service_type) tuples when
+    dedupe_on_service_type is set and service_type exists (so a node serving
+    multiple service types under the same nickname is counted once per
+    service type it serves), else nickname alone.
+    """
+    if dedupe_on_service_type and "service_type" in df.columns:
+        return list(zip(df["nickname"], df["service_type"].astype(str)))
+    return df["nickname"]
+
+
+def _strict_ghost_filter(df):
+    """
+    The stricter consecutive_hourly_absences == 0 filter (NaN kept) -- the
+    same deliberate deviation already established in
+    hsdir_churn_distributions for state-change-counting functions, NOT the
+    file's usual <= 1 ghost tolerance used everywhere else.
+    """
+    if "consecutive_hourly_absences" not in df.columns:
+        return df
+    cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+    return df[cha.isna() | (cha == 0)]
+
+
+def _format_entity_label(entity_id):
+    """
+    Pretty-print an entity id for a top-5 printout: a plain nickname string
+    as-is, or a (nickname, service_type) overlap-rule tuple as
+    'nickname (service_type)' rather than a raw Python tuple repr.
+    """
+    if isinstance(entity_id, tuple) and len(entity_id) == 2:
+        return f"{entity_id[0]} ({entity_id[1]})"
+    return str(entity_id)
+
+
+def _sorted_rank_plot(counts, output_path, title, y_label):
+    """
+    Sorted-rank plot: every entity's count, sorted ascending, plotted at
+    x = rank (1..N), y = count, linear y-axis. This is NOT a categorical
+    per-entity bar chart -- with hundreds/thousands of entities individual
+    labels wouldn't be legible, and a rank axis is what actually shows the
+    right-skewed shape (most entities barely change, a small tail changes
+    constantly) as a flat-then-sharp-upswing curve. A linear axis keeps the
+    actual counts directly readable (a log axis compresses the tail in a way
+    that can misrepresent how much larger the highest counts really are).
+
+    NICKNAME_CHANGES_RANK_PLOT_CAP (module-level toggle): None plots every
+    entity uncapped (current default); set to an integer N to instead select
+    only the N highest-count entities -- still chosen from the full,
+    uncapped computation -- and plot just those, sorted ascending.
+    """
+    values = sorted(counts)
+    if not values:
+        return
+    if NICKNAME_CHANGES_RANK_PLOT_CAP is not None and len(values) > NICKNAME_CHANGES_RANK_PLOT_CAP:
+        values = values[-NICKNAME_CHANGES_RANK_PLOT_CAP:]
+    x = list(range(1, len(values) + 1))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, values, linestyle="-", color="black", linewidth=1.2)
+    ax.set_xlabel("Rank (entities sorted by count, ascending)")
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _distinct_value_changes_report_and_plot(df, group_col, counted_col, label, output_path,
+                                             metric_label=None):
+    """
+    Shared logic for all three "sybil relay X changes" deliverables (the
+    counting analog of _sybil_top5_report_and_plot's compute -> print top 5
+    -> plot shape, but ranking by distinct-VALUE count of `counted_col`
+    rather than unique-fingerprint population): for each distinct
+    `group_col` value, count the number of distinct `counted_col` values it
+    has had across `df`. Prints the top 5 (full entity id + absolute count,
+    descending), then saves the sorted-rank plot of every entity's count.
+
+    Rows where `counted_col` is missing/'None' are excluded before counting,
+    same convention as the rest of this file (missing data isn't a
+    legitimate distinct value).
+    """
+    if metric_label is None:
+        metric_label = counted_col
+
+    scoped = df[
+        df[counted_col].notna()
+        & (df[counted_col].astype(str) != "None")
+        & (df[counted_col].astype(str) != "")
+    ]
+    if scoped.empty:
+        print(f"[CHANGES-INFO] No usable '{metric_label}' values for {label}; skipping.")
+        return
+
+    counts = scoped.groupby(group_col)[counted_col].nunique()
+    if counts.empty:
+        print(f"[CHANGES-INFO] No qualifying entities for '{metric_label}' — {label}; skipping.")
+        return
+
+    top5 = counts.sort_values(ascending=False).head(5)
+    print(f"\n[CHANGES] Top nicknames by distinct {metric_label} count — {label}")
+    for entity_id, count in top5.items():
+        print(f"    {_format_entity_label(entity_id)}: {count} distinct {metric_label}")
+
+    _sorted_rank_plot(
+        counts.tolist(), output_path,
+        title=f"{label} — distinct {metric_label} per nickname (sorted rank)",
+        y_label=f"Observed distinct {metric_label}",
+    )
+
+
+def _run_nickname_changes_distributions(df, context_label, out_dir, variants):
+    """
+    Shared driver for all three "sybil relay X changes" deliverables: apply
+    the strict ghost filter, drop rows with a missing/blank/default nickname,
+    build the tracked-overlap-rule entity key, run the general case, then
+    (for context_label == "tracked") repeat once per service_type -- factored
+    once here so it's written a single time regardless of how many fields
+    are being counted.
+
+    `variants` is a list of (counted_col, metric_label, filename_stub)
+    tuples: one entry for the fingerprint/family-id deliverables, two
+    entries (IP address and /24 subnet) for the IP-changes deliverable.
+    """
     if df is None or df.empty:
-        print(f"[ACTIONS-ERROR] Missing context dataframe arrays for layout: '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_ring_action_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating ring action metrics for service type subset: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_ring_action_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
+        print(f"[CHANGES-ERROR] Missing data slice for context '{context_label}'.")
+        return
+    if "nickname" not in df.columns:
+        print(f"[CHANGES-INFO] No nickname column for {context_label}; skipping.")
+        return
+
+    df = _strict_ghost_filter(df)
+    if df.empty:
+        print(f"[CHANGES-INFO] No rows survive the ghost filter for {context_label}; skipping.")
+        return
+
+    dedupe_st = (context_label == "tracked")
+
+    def run_scope(sub_df, label, filename_prefix, dedupe):
+        # "Unnamed" is Tor's literal fallback nickname string when an
+        # operator never configures one -- it is not a real, distinguishing
+        # identity, and since any number of unrelated relays can share it,
+        # grouping by it would attribute many different operators' unrelated
+        # fingerprint/family/IP changes to one fictitious "nickname". There is
+        # no way to distinguish that fallback from someone deliberately
+        # naming a relay "Unnamed", so it is excluded here the same way a
+        # missing/blank nickname already is -- both mean "no real nickname".
+        sub_df = sub_df[
+            sub_df["nickname"].notna()
+            & (sub_df["nickname"].astype(str) != "None")
+            & (sub_df["nickname"].astype(str) != "")
+            & (sub_df["nickname"].astype(str) != "Unnamed")
+        ]
+        if sub_df.empty:
+            print(f"[CHANGES-INFO] No usable nicknames for {label}; skipping.")
+            return
+        sub_df = sub_df.copy()
+        sub_df["_entity_key"] = _nickname_entity_key(sub_df, dedupe)
+        for counted_col, metric_label, filename_stub in variants:
+            if counted_col not in sub_df.columns:
+                print(f"[CHANGES-INFO] Column '{counted_col}' missing for {label}; skipping {metric_label}.")
+                continue
+            _distinct_value_changes_report_and_plot(
+                sub_df, "_entity_key", counted_col, label,
+                os.path.join(out_dir, f"{filename_prefix}_{filename_stub}.png"),
+                metric_label=metric_label,
+            )
+
+    run_scope(df, context_label, context_label, dedupe_st)
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            if sub.empty:
+                print(f"[CHANGES-INFO] No rows for service_type '{st}'; skipping.")
+                continue
+            run_scope(sub, f"tracked — {st}", st.lower(), False)
 
 
-# ANALYSIS 11: RING ACTION FAILURE REASON DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
-def compute_ring_action_reason_distribution(df_slice, context_label):
-    
-    os.makedirs("analysis-results/ring_action_reasons", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
+def sybil_relay_fingerprint_changes(df, context_label):
+    """
+    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
+    shape) and context_label ("network" or "tracked"): groups by nickname
+    (the (nickname, service_type) overlap-rule entity under "tracked"),
+    counts each entity's number of distinct fingerprint values across the
+    whole window, prints the top 5, and saves a sorted-rank plot to
+    analysis-results/sybil/fp_changes/{context_label}_fingerprint_changes.png.
 
-    if "action" not in df_slice.columns or "reason" not in df_slice.columns:
-        print(f"[REASONS-ERROR] Required columns ('action', 'reason') missing for context: {context_label}")
-        return None
-
-    df_failed = df_slice[df_slice["action"] == "FAILED"].copy()
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-    
-    unique_reasons = sorted([str(r) for r in df_failed["reason"].dropna().unique() if r not in ['None', 'nan', '']])
-    if not unique_reasons:
-        print(f"[REASONS-WARNING] No valid failure reasons discovered for context: {context_label}")
-        return None
-
-    for observation_day in unique_days_sorted:
-        day_data = df_failed[df_failed["date"] == observation_day]
-        
-        row = {"Observation Date": observation_day}
-        total_day_failures = 0
-        for reason in unique_reasons:
-            count = len(day_data[day_data["reason"] == reason])
-            row[reason] = count
-            total_day_failures += count
-        row["Total Failures"] = total_day_failures
-        computed_metrics.append(row)
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[REASONS-ERROR] Summary matrix empty for context: {context_label}")
-        return None
-        
-    plt.figure(figsize=(14, 6))
-    colors = sns.color_palette("Set2", len(unique_reasons))
-    for idx, reason in enumerate(unique_reasons):
-        plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix[reason], 
-                 marker='o', linewidth=2, label=f'Reason: {reason}', color=colors[idx])
-        for x, y in zip(df_summary_matrix["Observation Date"], df_summary_matrix[reason]):
-            plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-
-    plt.title(f"HSDir Failure Reasons Distribution ({context_label.replace('_', ' ').title()} - Daily)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Anomalous Event Count")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    daily_fig_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_daily.png"
-    plt.savefig(daily_fig_name)
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    agg_dict = {reason: "sum" for reason in unique_reasons}
-    agg_dict["Total Failures"] = "sum"
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg(agg_dict).reset_index()
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        for idx, reason in enumerate(unique_reasons):
-            plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix[reason], 
-                     marker='s', linewidth=2, label=f'Weekly {reason}', color=colors[idx])
-            for x, y in zip(df_weekly_matrix["Observation Week"], df_weekly_matrix[reason]):
-                plt.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9)
-                
-        plt.title(f"HSDir Failure Reasons Distribution ({context_label.replace('_', ' ').title()} - Weekly Sum)")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Total Event Count")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        weekly_fig_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_weekly.png"
-        plt.savefig(weekly_fig_name)
-        plt.close()
-        
-        weekly_totals = {"Observation Week": "Overall Total"}
-        for reason in unique_reasons:
-            weekly_totals[reason] = df_weekly_matrix[reason].sum()
-        weekly_totals["Total Failures"] = df_weekly_matrix["Total Failures"].sum()
-        
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/ring_action_reasons/{context_label}_action_reasons_weekly_matrix.csv", index=False)
-
-    daily_totals = {"Observation Date": "Overall Total"}
-    for reason in unique_reasons:
-        daily_totals[reason] = df_summary_matrix[reason].sum()
-    daily_totals["Total Failures"] = df_summary_matrix["Total Failures"].sum()
-    
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    matrix_csv_name = f"analysis-results/ring_action_reasons/{context_label}_action_reasons_daily_matrix.csv"
-    df_summary_matrix_export.to_csv(matrix_csv_name, index=False)
-    
-    print(f"[REASONS-INFO] Analysis successfully completed for context: '{context_label}'")
-    return df_summary_matrix
+    For context_label == "tracked", additionally repeats per service_type,
+    saved to
+    analysis-results/sybil/fp_changes/{service_type_lower}_fingerprint_changes.png.
+    """
+    out_dir = os.path.join("analysis-results", "sybil", "fp_changes")
+    _run_nickname_changes_distributions(
+        df, context_label, out_dir,
+        variants=[("fingerprint", "fingerprint", "fingerprint_changes")],
+    )
 
 
-def calculate_ring_action_reason_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} RING ACTION REASON DISTRIBUTIONS")
+def sybil_relay_family_id_changes(df, context_label):
+    """
+    Deliverable B. Identical logic to sybil_relay_fingerprint_changes, with
+    one substitution: counts distinct declared_family_id values per nickname
+    instead of distinct fingerprint values. Saved to
+    analysis-results/sybil/famID_changes/{context_label}_famID_changes.png
+    (and per service_type under "tracked":
+    {service_type_lower}_famID_changes.png).
+    """
+    out_dir = os.path.join("analysis-results", "sybil", "famID_changes")
+    _run_nickname_changes_distributions(
+        df, context_label, out_dir,
+        variants=[("declared_family_id", "declared_family_id", "famID_changes")],
+    )
+
+
+def sybil_relay_ip_changes(df, context_label):
+    """
+    Deliverable C. Same logic again, in two parallel variants per nickname:
+    distinct ip_address count, and distinct /24-subnet count (subnet derived
+    via _to_24_subnet). Saved to analysis-results/sybil/ip_changes/ as
+    {context_label}_ip_changes.png and {context_label}_subnet_24_changes.png
+    (and per service_type under "tracked":
+    {service_type_lower}_ip_changes.png /
+    {service_type_lower}_subnet_24_changes.png).
+    """
+    out_dir = os.path.join("analysis-results", "sybil", "ip_changes")
+
+    working = df.copy() if df is not None else df
+    if working is not None and "ip_address" in working.columns:
+        working["_subnet_24"] = working["ip_address"].apply(_to_24_subnet)
+
+    _run_nickname_changes_distributions(
+        working, context_label, out_dir,
+        variants=[
+            ("ip_address", "ip_address", "ip_changes"),
+            ("_subnet_24", "/24 subnet", "subnet_24_changes"),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# BPK (blinded-public-key / descriptor) upload–fetch persistence analysis
+#
+# Operates on the HSDir ring-event log (df_ring_events), NOT a consensus
+# snapshot table: each row is one observed descriptor event with an `action`
+# (UPLOADED / RECEIVED / FAILED) and, for failures, a `reason`. There is no
+# consecutive_hourly_absences column and therefore NO ghost filter here.
+#
+# The grouping entity throughout is the composite descriptor key
+# (descriptor_id_b64, onion_address) -- referred to as a "descriptor" in
+# labels. descriptor_id_b64 alone is NOT used because the raw data has bpk
+# collisions (the same id logged for multiple onions, even simultaneously --
+# an upstream defect, since a true V3 blinded key derives from one onion);
+# pairing the id with onion_address restores one descriptor per onion, so
+# each entity has a single service_type and per-type counts reconcile. Three
+# deliverables share one per-descriptor scan:
+#   * bpks_uf_persistance          -- per-descriptor TOTAL upload/fetch counts
+#   * bpks_hour_uf_persistance     -- per-descriptor DISTINCT (date, hour)
+#                                     bucket counts with an upload/fetch
+#   * bpks_not_upload_fetch_distributions -- per-descriptor silent-failure cats
+#
+# context_label is effectively always "tracked" (ring events exist only for
+# tracked onions); it is kept as a parameter for interface parity with the
+# rest of the file, and the per-service-type breakdown runs under "tracked".
+# ---------------------------------------------------------------------------
+
+# Upload/fetch histograms are heavily right-skewed (a small number of bpks
+# re-upload far more than the bulk -- the reference material itself notes
+# outliers re-published thousands of times). Clip the histogram's upper bin
+# edge to this value so a handful of extreme bpks don't flatten the whole
+# distribution against the x-axis; counts at or above it fall in the last
+# bin. Terminal output still reports the true unclipped extremes.
+BPK_HIST_CLIP = 50
+
+
+def _k_suffix_formatter():
+    """
+    Shared y-axis tick formatter rendering counts in thousands with a 'K'
+    suffix (e.g. 40000 -> '40K', 500 -> '0.5K'), via matplotlib's
+    FuncFormatter. One instance per axis (a formatter can't be shared across
+    multiple axes), so this returns a fresh formatter each call.
+    """
+    return mticker.FuncFormatter(lambda v, _pos: f"{v/1000:g}K")
+
+
+def _bpk_event_counts(df):
+    """
+    Single shared per-descriptor scan over the ring-event DataFrame, feeding
+    all three deliverables so df_ring_events is grouped once, not three times.
+
+    Grouping unit -- the composite descriptor key (descriptor_id_b64,
+    onion_address), NOT descriptor_id_b64 alone. In the real data the same
+    descriptor_id_b64 is logged for more than one onion_address (a bpk
+    "collision": ~35% of bare bpks map to 2+ onions, many at the SAME
+    timestamp -- cryptographically impossible for a true V3 blinded key, so a
+    defect in how the id was generated/logged upstream). A true blinded key is
+    derived from one onion's identity, so pairing the id with onion_address
+    restores the intended one-descriptor-per-onion unit: each composite entity
+    belongs to exactly one onion and therefore exactly one service_type,
+    which is what makes the per-service-type silent-failure counts partition
+    cleanly and sum to the tracked totals. The composite is referred to as a
+    "descriptor" in output labels (a (bpk, onion) pair is one descriptor
+    instance).
+
+    Returns a DataFrame indexed by a composite key (a (descriptor_id_b64,
+    onion_address) tuple, index name '_descriptor_key') with columns:
+      * uploads             total UPLOADED rows
+      * failed_uploads      total FAILED rows whose reason == UPLOAD_REJECTED
+      * fetches             total RECEIVED rows
+      * uploaded_hours      distinct (date, hour) buckets with >=1 UPLOADED
+      * failed_upload_hours distinct (date, hour) buckets with >=1
+                            FAILED+UPLOAD_REJECTED
+      * fetched_hours       distinct (date, hour) buckets with >=1 RECEIVED
+    Every composite descriptor that appears in `df` under any action gets a
+    row (missing action categories are 0), so downstream has/never logic sees
+    every descriptor.
+    """
+    work = df.copy()
+    action = work["action"].astype(str)
+    reason = work["reason"].astype(str) if "reason" in work.columns else pd.Series("None", index=work.index)
+
+    is_upload = action == "UPLOADED"
+    is_fetch = action == "RECEIVED"
+    is_failed_upload = (action == "FAILED") & (reason == "UPLOAD_REJECTED")
+
+    work["_is_upload"] = is_upload
+    work["_is_fetch"] = is_fetch
+    work["_is_failed_upload"] = is_failed_upload
+    work["_bucket"] = list(zip(work["date"], work["hour"]))
+    # Composite descriptor key: (descriptor_id_b64, onion_address).
+    work["_descriptor_key"] = list(zip(work["descriptor_id_b64"], work["onion_address"]))
+
+    all_keys = pd.Index(work["_descriptor_key"].unique(), name="_descriptor_key")
+
+    def total_counts(mask, name):
+        return work[mask].groupby("_descriptor_key").size().reindex(all_keys, fill_value=0).rename(name)
+
+    def distinct_hour_counts(mask, name):
+        return (
+            work[mask].groupby("_descriptor_key")["_bucket"].nunique()
+            .reindex(all_keys, fill_value=0).rename(name)
+        )
+
+    counts = pd.concat([
+        total_counts(work["_is_upload"], "uploads"),
+        total_counts(work["_is_failed_upload"], "failed_uploads"),
+        total_counts(work["_is_fetch"], "fetches"),
+        distinct_hour_counts(work["_is_upload"], "uploaded_hours"),
+        distinct_hour_counts(work["_is_failed_upload"], "failed_upload_hours"),
+        distinct_hour_counts(work["_is_fetch"], "fetched_hours"),
+    ], axis=1).fillna(0).astype(int)
+
+    return counts
+
+
+def _overlaid_uf_histogram(upload_vals, fetch_vals, output_path, title, x_label,
+                           failed_vals=None, failed_label="Failed uploads per descriptor"):
+    """
+    Overlaid histograms on one figure with shared bins and transparency:
+    uploads/uploaded-hours in blue, fetches/fetched-hours in orange, and --
+    when `failed_vals` is provided -- failed-uploads/failed-upload-hours in
+    green as a third series. Right-skew is handled by clipping values into
+    [0, BPK_HIST_CLIP] (values at or above the clip land in the final bin)
+    so outliers don't dominate the x-axis; the y-axis uses the shared
+    K-suffix formatter.
+    """
+    up = np.clip(np.asarray(upload_vals, dtype=float), 0, BPK_HIST_CLIP)
+    fe = np.clip(np.asarray(fetch_vals, dtype=float), 0, BPK_HIST_CLIP)
+    fa = np.clip(np.asarray(failed_vals, dtype=float), 0, BPK_HIST_CLIP) \
+        if failed_vals is not None else None
+    if up.size == 0 and fe.size == 0 and (fa is None or fa.size == 0):
+        print(f"[BPK-INFO] No descriptor data for '{title}'; skipping histogram.")
+        return
+
+    hi = max(
+        up.max() if up.size else 0,
+        fe.max() if fe.size else 0,
+        fa.max() if fa is not None and fa.size else 0,
+        1,
+    )
+    bins = np.linspace(0, hi, min(int(hi) + 1, 51))
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.hist(up, bins=bins, color="blue", alpha=0.55, label="Uploads per descriptor")
+    ax.hist(fe, bins=bins, color="orange", alpha=0.55, label="Fetches per descriptor")
+    if fa is not None:
+        ax.hist(fa, bins=bins, color="green", alpha=0.55, label=failed_label)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Number of descriptors")
+    ax.set_title(title)
+    ax.yaxis.set_major_formatter(_k_suffix_formatter())
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _iter_ring_scopes(df, context_label):
+    """
+    Yield (scope_df, label, filename_prefix) for the general context and,
+    when context_label == "tracked" and service_type exists, each non-empty
+    service type. Shared by all three deliverables' scope loops.
+    """
+    yield df, context_label, context_label
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            if sub.empty:
+                print(f"[BPK-INFO] No ring events for service_type '{st}'; skipping.")
+                continue
+            yield sub, f"tracked — {st}", st.lower()
+
+
+def bpks_uf_persistance(df, context_label):
+    """
+    Deliverable A. Per-bpk TOTAL upload and fetch event counts, drawn as an
+    overlaid pair of histograms (uploads-per-bpk blue, fetches-per-bpk
+    orange) over all bpks -- i.e. how many bpks had N uploads vs. how many
+    had N fetches, NOT one bar per bpk. Saved to
+    analysis-results/bpks/uf_persistance/{context_label}_bpks_upload_fetch_persistance.png,
+    and, under "tracked", once per service_type as
+    {service_type_lower}_bpks_upload_fetch_persistance.png.
+
+    failed_uploads is computed here (it feeds Deliverable C) but is not a
+    third plotted series -- the reference two-series design is uploads vs.
+    fetches only, and a plotted failed-upload series was found to clutter
+    the figure; a short failed-upload summary is printed instead.
+    """
     if df is None or df.empty:
-        print(f"[REASONS-ERROR] Missing input dataframe layout for context: '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_ring_action_reason_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating ring failure reason metrics for service type subset: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_ring_action_reason_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
+        print(f"[BPK-ERROR] Missing/empty ring-event data for '{context_label}'.")
+        return
+    out_dir = os.path.join("analysis-results", "bpks", "uf_persistance")
+
+    print(f"\n[BPK] Upload/fetch persistence (per-descriptor totals) — {context_label}")
+    for scope_df, label, prefix in _iter_ring_scopes(df, context_label):
+        counts = _bpk_event_counts(scope_df)
+        if counts.empty:
+            print(f"[BPK-INFO] No descriptors for {label}; skipping.")
+            continue
+
+        total_failed = int(counts["failed_uploads"].sum())
+        bpks_with_failed = int((counts["failed_uploads"] > 0).sum())
+        print(f"    [{label}] {len(counts)} descriptors | failed uploads: {total_failed} events "
+              f"across {bpks_with_failed} descriptors | max uploads/descriptor: {int(counts['uploads'].max())}, "
+              f"max fetches/descriptor: {int(counts['fetches'].max())}")
+
+        _overlaid_uf_histogram(
+            counts["uploads"].to_numpy(), counts["fetches"].to_numpy(),
+            os.path.join(out_dir, f"{prefix}_bpks_upload_fetch_persistance.png"),
+            title=f"Per-descriptor upload/fetch counts — {label}",
+            x_label="Number of uploads / fetches",
+        )
 
 
-# ANALYSIS 12: IP ENTITY OPERATOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
-def compute_ip_entity_operators_distribution(df_slice, context_label):
-    
-    os.makedirs("analysis-results/ip_operators", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
+def bpks_hour_uf_persistance(df, context_label):
+    """
+    Deliverable B. Per-bpk DISTINCT (date, hour) bucket counts: for each bpk,
+    how many distinct hourly consensus snapshots it had at least one upload
+    in (uploaded_hours) vs. at least one fetch in (fetched_hours). "Hour
+    bucket" = a distinct (date, hour) pair across the whole window, NOT one
+    of 24 recurring hour-of-day slots -- a bpk uploaded at 14:00 on ten days
+    counts as ten distinct buckets, not one. Same overlaid-histogram design
+    as Deliverable A. Saved to
+    analysis-results/bpks/uf_persistance/{context_label}_bpks_upload_fetch_hour_persistance.png
+    (and per service_type under "tracked").
 
-    def extract_routing_prefixes(ip_str):
-        if not isinstance(ip_str, str) or '.' not in ip_str:
-            return None, None
-        octets = ip_str.strip().split('.')
-        if len(octets) >= 4:
-            prefix_16 = f"{octets[0]}.{octets[1]}.0.0/16"
-            prefix_24 = f"{octets[0]}.{octets[1]}.{octets[2]}.0/24"
-            return prefix_16, prefix_24
-        return None, None
-
-    # Check for the required IP address field
-    if "ip_address" not in df_slice.columns:
-        print(f"[IP-ERROR] Required column 'ip_address' missing for context: {context_label}")
-        return None
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-
-    for observation_day in unique_days_sorted:
-        day_data = df_slice[df_slice["date"] == observation_day].dropna(subset=["ip_address"])
-        
-        set_16_blocks = set()
-        set_24_blocks = set()
-        
-        for ip in day_data["ip_address"]:
-            p16, p24 = extract_routing_prefixes(ip)
-            if p16 and p24:
-                set_16_blocks.add(p16)
-                set_24_blocks.add(p24)
-                
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Unique /16 IP Blocks": len(set_16_blocks),
-            "Unique /24 IP Blocks": len(set_24_blocks)
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[IP-ERROR] Generated empty operator matrix for context: {context_label}")
-        return None
-
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique /16 IP Blocks"], 
-             marker='o', linewidth=2, label='Unique /16 Network Blocks', color='#1f77b4')
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique /24 IP Blocks"], 
-             marker='s', linewidth=2, label='Unique /24 Subnet Blocks', color='#ff7f0e')
-    
-    for x, y1, y2 in zip(df_summary_matrix["Observation Date"], 
-                         df_summary_matrix["Unique /16 IP Blocks"], 
-                         df_summary_matrix["Unique /24 IP Blocks"]):
-        plt.annotate(f"{int(y1)}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#1f77b4')
-        plt.annotate(f"{int(y2)}", (x, y2), textcoords="offset points", xytext=(0, -14), ha='center', fontsize=9, color='#ff7f0e')
-
-    plt.title(f"HSDir IP Operator Footprint Distribution ({context_label.replace('_', ' ').title()} - Daily)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Unique Autonomous Routing Prefixes")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    plt.savefig(f"analysis-results/ip_operators/{context_label}_ip_operators_daily.png")
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Unique /16 IP Blocks": "mean",
-        "Unique /24 IP Blocks": "mean"
-    }).reset_index()
-    
-    df_weekly_matrix["Unique /16 IP Blocks"] = df_weekly_matrix["Unique /16 IP Blocks"].round(2)
-    df_weekly_matrix["Unique /24 IP Blocks"] = df_weekly_matrix["Unique /24 IP Blocks"].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique /16 IP Blocks"], 
-                 marker='o', linewidth=2, label='Mean Weekly /16 Blocks', color='#2ca02c')
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique /24 IP Blocks"], 
-                 marker='s', linewidth=2, label='Mean Weekly /24 Blocks', color='#d62728')
-        
-        for x, y1, y2 in zip(df_weekly_matrix["Observation Week"], 
-                             df_weekly_matrix["Unique /16 IP Blocks"], 
-                             df_weekly_matrix["Unique /24 IP Blocks"]):
-            plt.annotate(f"{y1}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#2ca02c')
-            plt.annotate(f"{y2}", (x, y2), textcoords="offset points", xytext=(0, -14), ha='center', fontsize=9, color='#d62728')
-            
-        plt.title(f"HSDir IP Operator Footprint Distribution ({context_label.replace('_', ' ').title()} - Weekly Mean)")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Distinct Network Volume")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        plt.savefig(f"analysis-results/ip_operators/{context_label}_ip_operators_weekly.png")
-        plt.close()
-        
-        weekly_totals = {
-            "Observation Week": "Overall Mean",
-            "Unique /16 IP Blocks": round(df_weekly_matrix["Unique /16 IP Blocks"].mean(), 2),
-            "Unique /24 IP Blocks": round(df_weekly_matrix["Unique /24 IP Blocks"].mean(), 2)
-        }
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/ip_operators/{context_label}_ip_operators_weekly_matrix.csv", index=False)
-
-    daily_totals = {
-        "Observation Date": "Overall Mean",
-        "Unique /16 IP Blocks": round(df_summary_matrix["Unique /16 IP Blocks"].mean(), 2),
-        "Unique /24 IP Blocks": round(df_summary_matrix["Unique /24 IP Blocks"].mean(), 2)
-    }
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_summary_matrix_export.to_csv(f"analysis-results/ip_operators/{context_label}_ip_operators_daily_matrix.csv", index=False)
-    
-    print(f"[IP-INFO] Completed unique operator network distribution logs for context: '{context_label}'")
-    return df_summary_matrix
-
-
-def calculate_ip_entity_operators_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} IP OPERATOR DISTRIBUTION")
+    Shares the _bpk_event_counts scan with Deliverable A so df_ring_events is
+    grouped once; kept a separate public function because its metric (distinct
+    hour buckets) genuinely differs from A's (total event counts).
+    """
     if df is None or df.empty:
-        print(f"[IP-ERROR] Provided dataframe array is missing or empty for context: '{context_label}'.")
-        return None
-    
-    global_reporting_matrix = compute_ip_entity_operators_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Segmenting routing topologies for service subset: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_ip_entity_operators_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
+        print(f"[BPK-ERROR] Missing/empty ring-event data for '{context_label}'.")
+        return
+    out_dir = os.path.join("analysis-results", "bpks", "uf_persistance")
+
+    print(f"\n[BPK] Upload/fetch persistence (distinct hour buckets) — {context_label}")
+    for scope_df, label, prefix in _iter_ring_scopes(df, context_label):
+        counts = _bpk_event_counts(scope_df)
+        if counts.empty:
+            print(f"[BPK-INFO] No descriptors for {label}; skipping.")
+            continue
+
+        print(f"    [{label}] {len(counts)} descriptors | max uploaded-hours/descriptor: "
+              f"{int(counts['uploaded_hours'].max())}, max fetched-hours/descriptor: "
+              f"{int(counts['fetched_hours'].max())}")
+
+        _overlaid_uf_histogram(
+            counts["uploaded_hours"].to_numpy(), counts["fetched_hours"].to_numpy(),
+            os.path.join(out_dir, f"{prefix}_bpks_upload_fetch_hour_persistance.png"),
+            title=f"Per-descriptor distinct upload/fetch hour buckets — {label}",
+            x_label="Number of distinct hours uploaded / fetched",
+        )
 
 
-# ANALYSIS 13: FAMILY ID ENTITY OPERATOR DISTRIBUTION ANALYSIS (DAILY & WEEKLY)
-def compute_family_id_entity_operators_distribution(df_slice, context_label):
-    
-    os.makedirs("analysis-results/family_operators", exist_ok=True)
-    computed_metrics = []
-    
-    def get_day_integer(day_str):
-        if isinstance(day_str, str) and len(day_str.split()) > 1 and day_str.split()[1].isdigit():
-            return int(day_str.split()[1])
-        return 0
+def _plot_silent_failure_bars(categories_by_label, output_path, title):
+    """
+    Grouped bar chart of the two silent-failure categories. For a single
+    scope, `categories_by_label` = {label: (uploaded_never_fetched,
+    fetched_never_uploaded)} with one entry; for the per-service-type
+    combined figure it has one entry per service type, clustered.
+    """
+    labels = list(categories_by_label.keys())
+    cat_names = ["Uploaded, never fetched", "Fetched, never uploaded"]
+    x = np.arange(len(cat_names))
+    n = len(labels)
+    width = 0.8 / max(n, 1)
 
-    if "declared_family_id" not in df_slice.columns:
-        print(f"[FAMILY-ERROR] Required column 'declared_family_id' missing for context: {context_label}")
-        return None
+    fig, ax = plt.subplots(figsize=(9, 6))
+    for i, label in enumerate(labels):
+        vals = categories_by_label[label]
+        offset = (i - (n - 1) / 2) * width
+        ax.bar(x + offset, vals, width=width, color=_series_color(label, i), label=str(label))
 
-    df_valid = df_slice.copy()
-    df_valid["declared_family_id"] = df_valid["declared_family_id"].astype(str).str.strip()
-    
-    invalid_tokens = ['none', 'nan', '', '[]', 'empty', 'unknown', 'false']
-    df_valid = df_valid[~df_valid["declared_family_id"].str.lower().isin(invalid_tokens)]
-
-    unique_days = [d for d in df_slice["date"].unique() if d not in ['', 'None']]
-    unique_days_sorted = sorted(unique_days, key=get_day_integer)
-
-    for observation_day in unique_days_sorted:
-        day_global = df_slice[df_slice["date"] == observation_day]
-        day_families = df_valid[df_valid["date"] == observation_day]
-        
-        unique_families_count = day_families["declared_family_id"].nunique()
-        total_nodes_in_families = len(day_families)
-        
-
-        computed_metrics.append({
-            "Observation Date": observation_day,
-            "Unique Declared Families": unique_families_count,
-            "Nodes within Families": total_nodes_in_families
-        })
-
-    df_summary_matrix = pd.DataFrame(computed_metrics)
-    if df_summary_matrix.empty:
-        print(f"[FAMILY-ERROR] Generated empty family matrix array for context: {context_label}")
-        return None
-
-    plt.figure(figsize=(14, 6))
-    plt.plot(df_summary_matrix["Observation Date"], df_summary_matrix["Unique Declared Families"], 
-             marker='o', linewidth=2, label='Unique Declared Operator Families', color='#8884d8')
-    
-    for x, y1 in zip(df_summary_matrix["Observation Date"], 
-                         df_summary_matrix["Unique Declared Families"]):
-        plt.annotate(f"{int(y1)}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#8884d8')
-
-    plt.title(f"HSDir Declared Family ID Distribution ({context_label.replace('_', ' ').title()} - Daily)")
-    plt.xlabel("Observation Timeline")
-    plt.ylabel("Distinct Entity / Node Count")
-    plt.xticks(rotation=45)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    
-    plt.savefig(f"analysis-results/family_operators/{context_label}_family_operators_daily.png")
-    plt.close()
-
-    df_weekly_prep = df_summary_matrix.copy()
-    df_weekly_prep["DayNum"] = df_weekly_prep["Observation Date"].apply(get_day_integer)
-    df_weekly_prep["WeekIndex"] = df_weekly_prep["DayNum"].apply(lambda d: f"Week {((d - 1) // 7) + 1}")
-    
-    df_weekly_matrix = df_weekly_prep.groupby("WeekIndex").agg({
-        "Unique Declared Families": "mean",
-        "Nodes within Families": "mean"
-    }).reset_index()
-    
-    for col in ["Unique Declared Families", "Nodes within Families"]:
-        df_weekly_matrix[col] = df_weekly_matrix[col].round(2)
-    df_weekly_matrix.rename(columns={"WeekIndex": "Observation Week"}, inplace=True)
-
-    if not df_weekly_matrix.empty:
-        plt.figure(figsize=(10, 6))
-        plt.plot(df_weekly_matrix["Observation Week"], df_weekly_matrix["Unique Declared Families"], 
-                 marker='s', linewidth=2, label='Mean Active Families', color='#413ea0')
-        
-        for x, y1 in zip(df_weekly_matrix["Observation Week"], 
-                             df_weekly_matrix["Unique Declared Families"]):
-            plt.annotate(f"{y1}", (x, y1), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#413ea0')
-            
-        plt.title(f"HSDir Declared Family ID Distribution ({context_label.replace('_', ' ').title()} - Weekly Mean)")
-        plt.xlabel("Observation Timeline (Weeks)")
-        plt.ylabel("Mean Entity Densities")
-        plt.legend(loc="upper right")
-        plt.tight_layout()
-        
-        plt.savefig(f"analysis-results/family_operators/{context_label}_family_operators_weekly.png")
-        plt.close()
-        
-        weekly_totals = {
-            "Observation Week": "Overall Mean",
-            "Unique Declared Families": round(df_weekly_matrix["Unique Declared Families"].mean(), 2),
-            "Nodes within Families": round(df_weekly_matrix["Nodes within Families"].mean(), 2)
-        }
-        df_weekly_matrix_export = pd.concat([df_weekly_matrix, pd.DataFrame([weekly_totals])], ignore_index=True)
-        df_weekly_matrix_export.to_csv(f"analysis-results/family_operators/{context_label}_family_operators_weekly_matrix.csv", index=False)
-
-    daily_totals = {
-        "Observation Date": "Overall Mean",
-        "Unique Declared Families": round(df_summary_matrix["Unique Declared Families"].mean(), 2),
-        "Nodes within Families": round(df_summary_matrix["Nodes within Families"].mean(), 2)
-    }
-    df_summary_matrix_export = pd.concat([df_summary_matrix, pd.DataFrame([daily_totals])], ignore_index=True)
-    df_summary_matrix_export.to_csv(f"analysis-results/family_operators/{context_label}_family_operators_daily_matrix.csv", index=False)
-    
-    print(f"[FAMILY-INFO] Analysis successfully completed for context: '{context_label}'")
-    return df_summary_matrix
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(cat_names)
+    ax.set_ylabel("Number of descriptors")
+    ax.set_title(title)
+    if n > 1:
+        ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
 
 
-def calculate_family_id_entity_operators_distributions(df, context_label):
-    print(f"PROCESSING {context_label.upper()} FAMILY ID OPERATOR DISTRIBUTIONS")
+def _write_silent_failure_debug_csv(counts, output_path):
+    """Per-descriptor diagnostic table written when a scope has no
+    silent-failure signal, so an empty result can be checked for a join/field
+    bug vs. a genuine absence. The composite index is split back into its
+    descriptor_id_b64 and onion_address components for readability."""
+    table = counts.reset_index().copy()
+    # _descriptor_key is a (descriptor_id_b64, onion_address) tuple column.
+    table["descriptor_id_b64"] = table["_descriptor_key"].map(lambda k: k[0])
+    table["onion_address"] = table["_descriptor_key"].map(lambda k: k[1])
+    table = table[
+        ["descriptor_id_b64", "onion_address", "uploads", "failed_uploads", "fetches"]
+    ]
+    table["has_upload"] = table["uploads"] > 0
+    table["has_fetch"] = table["fetches"] > 0
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    table.to_csv(output_path, index=False)
+    print(f"    --> Wrote diagnostic CSV: {output_path}")
+
+
+def bpks_not_upload_fetch_distributions(df, context_label):
+    """
+    Deliverable C. Silent-failure detection over per-bpk upload/fetch
+    presence. Two categories per bpk:
+      * uploaded-never-fetched : has_upload and not has_fetch
+      * fetched-never-uploaded : has_fetch and not has_upload
+
+    A bpk (blinded public key) is derived from exactly ONE onion address,
+    and each onion belongs to exactly ONE service_type -- so a bpk's
+    has_upload / has_fetch status is a property of the descriptor itself,
+    judged over ALL of that bpk's events, and its service_type is a single
+    fixed label. The per-service-type breakdown therefore attributes each
+    globally-judged bpk to its own service_type; it does NOT re-decide
+    upload/fetch presence from only that service type's rows. This guarantees
+    the per-type category counts partition the bpks and SUM to the tracked
+    totals. (An earlier version filtered events per service type before
+    judging presence, which let a single bpk be double-counted across types
+    and broke that reconciliation.)
+
+    Data-integrity check: because "a bpk spans two service types" is
+    semantically impossible for valid data (a descriptor can't belong to two
+    different onions/experiments at once), any bpk observed under more than
+    one service_type -- or more than one onion_address -- is reported as a
+    data-integrity warning rather than silently modeled around. If the data
+    is clean this prints nothing; if it fires, the per-type sums may not
+    reconcile and the offending bpks should be investigated upstream.
+
+    Methodological note (this project's own framing, not a citation): for
+    arbitrary public V3 onions "uploaded but never fetched" is the expected
+    common case -- most onion services are lightly used and any one
+    monitoring node sees only a fraction of the responsible HSDirs, so an
+    upload without a fetch usually just means nobody asked this node. THIS
+    dataset differs: the onions here are the experiment's own targeted/owned
+    and probed services (STATIC_CONTROL / EPHEMERAL_VARIABLE /
+    THIRD_PARTY_PROBE), which the experiment itself is expected to probe/fetch
+    by design -- so an uploaded-never-fetched bpk is a more meaningful anomaly
+    signal here (the probing side may have failed to reach the descriptor)
+    than for a general crawl. Fetched-never-uploaded is odd almost by
+    construction (a fetch implies some upload happened somewhere) and more
+    likely reflects a monitoring gap -- missing the upload snapshot -- than a
+    real protocol anomaly. Both are reported as signals/caveats, not asserted
+    as confirmed failures.
+
+    Prints per-category absolute count and percentage of unique bpks. When
+    both categories are empty for a scope, skips the plot, prints a clear
+    "no signal" notice, and writes a per-bpk diagnostic CSV. Under "tracked",
+    repeats per service_type, combining the per-type category counts into one
+    clustered grouped-bar figure (empty-per-type checked independently).
+    """
     if df is None or df.empty:
-        print(f"[FAMILY-ERROR] Missing input dataframe layout for context: '{context_label}'.")
+        print(f"[BPK-ERROR] Missing/empty ring-event data for '{context_label}'.")
+        return
+    out_dir = os.path.join("analysis-results", "bpks", "uf_failure")
+
+    print(f"\n[BPK] Silent-failure detection — {context_label}")
+
+    # --- bpk-collision note: a true V3 blinded key is derived from one onion,
+    # so a bare descriptor_id_b64 appearing under multiple onions/service types
+    # is an upstream data defect (collision). This analysis groups on the
+    # composite (descriptor_id_b64, onion_address) key, which splits those
+    # collisions back into per-onion descriptors -- so per-type counts DO
+    # reconcile with the tracked totals regardless. The counts below are
+    # informational (how much collision the raw data has), not a correctness
+    # warning about this analysis. onion->service_type stays 1:1 (verified),
+    # which is what the composite key relies on. ---
+    if "service_type" in df.columns:
+        st_per_bpk = df.groupby("descriptor_id_b64")["service_type"].nunique()
+        multi_st = int((st_per_bpk > 1).sum())
+        if multi_st:
+            print(f"    [BPK-COLLISION NOTE] {multi_st} raw descriptor_id_b64 value(s) span "
+                  f"more than one service_type upstream; the composite (bpk, onion) key "
+                  f"resolves these into per-onion descriptors, so per-type sums still reconcile.")
+    if "onion_address" in df.columns:
+        onion_per_bpk = df.groupby("descriptor_id_b64")["onion_address"].nunique()
+        multi_onion = int((onion_per_bpk > 1).sum())
+        if multi_onion:
+            print(f"    [BPK-COLLISION NOTE] {multi_onion} raw descriptor_id_b64 value(s) map "
+                  f"to more than one onion_address upstream (bpk collision); split per-onion "
+                  f"by the composite key.")
+        # The composite key assumes onion -> service_type is 1:1; verify.
+        if "service_type" in df.columns:
+            st_per_onion = df.groupby("onion_address")["service_type"].nunique()
+            bad_onions = int((st_per_onion > 1).sum())
+            if bad_onions:
+                print(f"    [DATA-INTEGRITY WARNING] {bad_onions} onion_address(es) span more "
+                      f"than one service_type — breaks the composite-key assumption; per-type "
+                      f"attribution may be ambiguous. Investigate upstream.")
+
+    # --- Global per-descriptor counts (over ALL events), judged once. ---
+    counts = _bpk_event_counts(df)
+    total_bpks = len(counts)
+    has_upload = counts["uploads"] > 0
+    has_fetch = counts["fetches"] > 0
+    uploaded_never_fetched_mask = has_upload & ~has_fetch
+    fetched_never_uploaded_mask = has_fetch & ~has_upload
+
+    unf = int(uploaded_never_fetched_mask.sum())
+    fnu = int(fetched_never_uploaded_mask.sum())
+
+    def pct(n, denom):
+        return (n / denom) if denom else 0.0
+
+    print(f"    [{context_label}] {total_bpks} unique descriptors")
+    print(f"        uploaded, never fetched: {unf} ({pct(unf, total_bpks):.2%})")
+    print(f"        fetched, never uploaded: {fnu} ({pct(fnu, total_bpks):.2%})")
+
+    if unf == 0 and fnu == 0:
+        print(f"    [{context_label}] no silent-failure signal found; writing diagnostic CSV.")
+        _write_silent_failure_debug_csv(
+            counts, os.path.join(out_dir, f"{context_label}_bpks_not_upload_fetch_debug.csv"))
+    else:
+        _plot_silent_failure_bars(
+            {context_label: (unf, fnu)},
+            os.path.join(out_dir, f"{context_label}_bpks_not_upload_fetch.png"),
+            title=f"Silent-failure descriptor categories — {context_label}",
+        )
+
+    # --- Per-service-type: attribute each globally-flagged bpk to its own
+    # service_type (one map lookup), so the per-type counts sum to tracked. ---
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        # Each composite descriptor key is (bpk, onion_address); its
+        # service_type is that onion's service_type (every onion maps to
+        # exactly one). Map onion -> service_type, then look up each key's
+        # onion (the 2nd tuple element).
+        onion_to_st = (
+            df[["onion_address", "service_type"]]
+            .drop_duplicates("onion_address")
+            .set_index("onion_address")["service_type"]
+        )
+        st_of = counts.index.to_series().map(lambda k: onion_to_st.get(k[1]))
+
+        combined = {}
+        for st in service_types:
+            in_st = (st_of == st)
+            st_total = int(in_st.sum())
+            if st_total == 0:
+                print(f"[BPK-INFO] No descriptors for service_type '{st}'; skipping.")
+                continue
+            st_unf = int((uploaded_never_fetched_mask & in_st).sum())
+            st_fnu = int((fetched_never_uploaded_mask & in_st).sum())
+            print(f"    [tracked — {st}] {st_total} unique descriptors | "
+                  f"uploaded-never-fetched: {st_unf} ({pct(st_unf, st_total):.2%}) | "
+                  f"fetched-never-uploaded: {st_fnu} ({pct(st_fnu, st_total):.2%})")
+
+            if st_unf == 0 and st_fnu == 0:
+                print(f"    [tracked — {st}] no silent-failure signal; writing diagnostic CSV.")
+                _write_silent_failure_debug_csv(
+                    counts[in_st.values],
+                    os.path.join(out_dir, f"{st.lower()}_bpks_not_upload_fetch_debug.csv"))
+                continue
+            combined[st] = (st_unf, st_fnu)
+
+        if combined:
+            _plot_silent_failure_bars(
+                combined,
+                os.path.join(out_dir, "service_types_bpks_not_upload_fetch.png"),
+                title="Silent-failure descriptor categories by service type — tracked",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Undeclared-family mutual-graph analysis
+#
+# Builds a MUTUAL (bidirectional) family graph from the list-valued
+# `declared_family` field and classifies focus nodes by the declared-family-ID
+# status of their confirmed mutual neighbors. Two deliverables share one graph
+# per scope:
+#   * Deliverable A (no-ID-focused):   focus = nodes with declared_family_id "None"
+#   * Deliverable B (with-ID-focused): focus = nodes with a declared_family_id F,
+#                                      excluding same-F neighbors first
+# Each produces three mutually-exclusive categories (mixed / only-with-ID /
+# only-without-ID). Per-day plots + per-day averages, plus a month-wide
+# whole-scope printout (no plot).
+#
+# Ghost filter is the stricter consecutive_hourly_absences == 0 (NaN kept),
+# matching the churn / change-count precedent, NOT the file's usual <= 1.
+# ---------------------------------------------------------------------------
+
+_UNDECLARED_CATEGORIES = ("mixed", "only_with_id", "only_without_id")
+_UNDECLARED_CATEGORY_LABELS = {
+    "mixed": "Mixed",
+    "only_with_id": "Only-with-ID",
+    "only_without_id": "Only-without-ID",
+}
+
+
+def _undeclared_ghost_filter(df):
+    """Stricter == 0 presence filter (NaN kept), per point 1.6."""
+    if "consecutive_hourly_absences" not in df.columns:
+        return df
+    cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
+    return df[cha.isna() | (cha == 0)]
+
+
+def _build_mutual_family_graph(scope_df):
+    """
+    Build the mutual (bidirectional) family graph for one scope's rows (a day,
+    or the whole month). `scope_df` is already ghost-filtered.
+
+    Node population: every distinct fingerprint present as its own row in
+    scope_df. A fingerprint's declared_family is the UNION of every list
+    observed for it across all rows in the scope (per §2's confirmed
+    union resolution), self-references dropped.
+
+    A mutual edge A<->B exists iff B is in A's family union AND A is in B's
+    family union AND both A and B are present nodes. A one-sided listing, or a
+    listing toward a fingerprint that never appears as its own row, is
+    automatically not mutual (nothing to confirm it against).
+
+    Returns (adjacency, present) where:
+      * adjacency: dict fingerprint -> set of mutual-neighbor fingerprints
+        (only present nodes appear as keys; a node with no mutual edge maps
+        to an empty set).
+      * present:  set of all present fingerprints (the node population).
+    """
+    present = set(scope_df["fingerprint"].unique())
+
+    # Union of declared_family per fingerprint (drop self-references).
+    fam_union = {}
+    for fp, fam in zip(scope_df["fingerprint"], scope_df["declared_family"]):
+        if not isinstance(fam, list):
+            continue
+        acc = fam_union.setdefault(fp, set())
+        for other in fam:
+            if other != fp:
+                acc.add(other)
+
+    adjacency = {fp: set() for fp in present}
+    for a, a_fam in fam_union.items():
+        if a not in present:
+            continue
+        for b in a_fam:
+            # Mutual check: b present, b lists a back. a<b guard avoids
+            # doing the pair twice, then we add both directions.
+            if b in present and b in fam_union and a in fam_union[b]:
+                adjacency[a].add(b)
+                adjacency[b].add(a)
+    return adjacency, present
+
+
+def _scope_family_id_map(scope_df, most_recent=False):
+    """
+    fingerprint -> its declared_family_id (as a plain str, "None" when unset).
+
+    most_recent=False (per-day): a day's rows are effectively one status per
+    node; take the first non-null seen (they don't vary meaningfully within a
+    day). most_recent=True (month-wide, §5): a node's ID can change across the
+    month, so use the most-recently-observed value -- scope_df is already in
+    chronological order post validate_sort_data, so the last row wins.
+    """
+    id_map = {}
+    if most_recent:
+        for fp, fid in zip(scope_df["fingerprint"], scope_df["declared_family_id"]):
+            id_map[fp] = str(fid)  # last write wins -> most recent
+    else:
+        for fp, fid in zip(scope_df["fingerprint"], scope_df["declared_family_id"]):
+            if fp not in id_map or id_map[fp] == "None":
+                id_map[fp] = str(fid)
+    return id_map
+
+
+def _classify_node_no_id(node, adjacency, id_map):
+    """
+    Deliverable A classification for a focus node (declared_family_id "None").
+    Returns one of _UNDECLARED_CATEGORIES, or None if the node has zero mutual
+    neighbors (excluded from all metrics).
+    """
+    neighbors = adjacency.get(node, set())
+    if not neighbors:
         return None
-    
-    global_reporting_matrix = compute_family_id_entity_operators_distribution(df, context_label)
-    
-    if context_label in ["tracked_targets", "rotated_tracked_targets"] and "service_type" in df.columns:
-        unique_services = df["service_type"].dropna().unique()
-        unique_services = [s for s in unique_services if s not in ['', 'nan', 'None']]
-        
-        for service in unique_services:
-            print(f"    --> Isolating cryptographic family metrics for service type subset: {service}")
-            sub_population_df = df[df["service_type"] == service]
-            if not sub_population_df.empty:
-                segmented_label = f"{context_label}_{str(service).lower()}"
-                compute_family_id_entity_operators_distribution(sub_population_df, segmented_label)
-                
-    return global_reporting_matrix
+    any_with = any(id_map.get(n, "None") != "None" for n in neighbors)
+    any_without = any(id_map.get(n, "None") == "None" for n in neighbors)
+    if any_with and any_without:
+        return "mixed"
+    if any_with:
+        return "only_with_id"
+    return "only_without_id"
 
 
-# MAIN
+def _classify_node_with_id(node, adjacency, id_map, focus_id):
+    """
+    Deliverable B classification for a focus node whose own family ID is
+    focus_id (!= "None"). Same-family-ID mutual neighbors are excluded first
+    (an intra-family mutual link is expected, not an undeclared signal).
+    Returns one of _UNDECLARED_CATEGORIES, or None if zero remaining neighbors.
+    """
+    neighbors = [n for n in adjacency.get(node, set())
+                 if id_map.get(n, "None") != focus_id]
+    if not neighbors:
+        return None
+    any_with = any(id_map.get(n, "None") != "None" for n in neighbors)
+    any_without = any(id_map.get(n, "None") == "None" for n in neighbors)
+    if any_with and any_without:
+        return "mixed"
+    if any_with:
+        return "only_with_id"
+    return "only_without_id"
+
+
+def _service_type_multiplicity(scope_df, restrict_fps=None):
+    """
+    fingerprint -> number of distinct service types it served in scope_df
+    (the overlap-rule weight, applied at tally time). If restrict_fps is
+    given, only those fingerprints are counted (weight 0/absent otherwise).
+    When service_type is absent (network context), every fingerprint weighs 1.
+    """
+    if "service_type" not in scope_df.columns:
+        fps = restrict_fps if restrict_fps is not None else set(scope_df["fingerprint"].unique())
+        return {fp: 1 for fp in fps}
+    sub = scope_df
+    if restrict_fps is not None:
+        sub = sub[sub["fingerprint"].isin(restrict_fps)]
+    return sub.groupby("fingerprint")["service_type"].nunique().to_dict()
+
+
+def _tally_scope(scope_df, id_map, adjacency, present, focus_fps, classifier,
+                 weight_map):
+    """
+    Tally one scope (day or month) for one deliverable into category counts.
+
+    focus_fps: the set of fingerprints in the focus population for this
+      deliverable (already filtered to the classified node set for a
+      per-service-type breakdown).
+    classifier: callable(node) -> category or None.
+    weight_map: fingerprint -> overlap-rule weight (contribution to the
+      count). For the tracked combined case this is the service-type
+      multiplicity; for network / per-service-type it's 1 per node.
+
+    Returns {category: count}.
+    """
+    counts = {c: 0 for c in _UNDECLARED_CATEGORIES}
+    for fp in focus_fps:
+        cat = classifier(fp)
+        if cat is None:
+            continue
+        counts[cat] += weight_map.get(fp, 1)
+    return counts
+
+
+def _undeclared_counts_for_scope(scope_df, weight_restrict_fps=None,
+                                 most_recent_id=False):
+    """
+    Build the graph + id map once for a scope and return both deliverables'
+    category counts: (counts_no_id, counts_with_id).
+
+    weight_restrict_fps: for a per-service-type breakdown, the set of
+      fingerprints that served that service type in the scope -- only these
+      are classified/counted, but the graph is the FULL scope graph (§2
+      scoping resolution). None -> classify all present nodes with the
+      overlap-rule weight (tracked combined) or weight 1 (network).
+    """
+    adjacency, present = _build_mutual_family_graph(scope_df)
+    id_map = _scope_family_id_map(scope_df, most_recent=most_recent_id)
+
+    # Focus populations (restricted to the countable node set if given).
+    countable = present if weight_restrict_fps is None else (present & weight_restrict_fps)
+    no_id_focus = {fp for fp in countable if id_map.get(fp, "None") == "None"}
+    with_id_focus = {fp for fp in countable if id_map.get(fp, "None") != "None"}
+
+    # Weights: per-service-type breakdown counts each node once (weight 1);
+    # otherwise use service-type multiplicity (network -> all 1s).
+    if weight_restrict_fps is None:
+        weight_map = _service_type_multiplicity(scope_df)
+    else:
+        weight_map = {fp: 1 for fp in countable}
+
+    counts_no_id = _tally_scope(
+        scope_df, id_map, adjacency, present, no_id_focus,
+        lambda fp: _classify_node_no_id(fp, adjacency, id_map), weight_map)
+    counts_with_id = _tally_scope(
+        scope_df, id_map, adjacency, present, with_id_focus,
+        lambda fp: _classify_node_with_id(fp, adjacency, id_map, id_map.get(fp, "None")),
+        weight_map)
+    return counts_no_id, counts_with_id
+
+
+def _plot_undeclared(days, per_day_counts, output_path, title):
+    """
+    One solid line per category (mixed / only-with-ID / only-without-ID) over
+    days, absolute counts. per_day_counts: list aligned with `days`, each a
+    {category: count} dict.
+    """
+    x = list(range(len(days)))
+    fig, ax = plt.subplots(figsize=(max(11, len(days) * 0.6), 6))
+    for i, cat in enumerate(_UNDECLARED_CATEGORIES):
+        y = [per_day_counts[d].get(cat, 0) for d in range(len(days))]
+        ax.plot(x, y, linestyle="-", linewidth=1.2,
+                color=_series_color(cat, i), label=_UNDECLARED_CATEGORY_LABELS[cat])
+    ax.set_xticks(x)
+    ax.set_xticklabels(days, rotation=45, ha="right", fontsize=8)
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Node count")
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    --> Saved plot: {output_path}")
+
+
+def _print_undeclared_averages(per_day_counts, n_days, label, deliverable):
+    """Per-metric average per day (sum over days / number of days)."""
+    print(f"    [{label}] {deliverable} — average per day:")
+    for cat in _UNDECLARED_CATEGORIES:
+        total = sum(per_day_counts[d].get(cat, 0) for d in range(len(per_day_counts)))
+        avg = (total / n_days) if n_days else 0.0
+        print(f"        {_UNDECLARED_CATEGORY_LABELS[cat]}: {avg:.4f}")
+
+
+def _print_undeclared_monthwide(counts_no_id, counts_with_id, label):
+    """Six month-wide absolute counts, clearly labeled as whole-scope totals."""
+    print(f"    [{label}] [Month-wide, all consensuses] no-ID-focused — "
+          + ", ".join(f"{_UNDECLARED_CATEGORY_LABELS[c]}: {counts_no_id[c]}"
+                      for c in _UNDECLARED_CATEGORIES))
+    print(f"    [{label}] [Month-wide, all consensuses] with-ID-focused — "
+          + ", ".join(f"{_UNDECLARED_CATEGORY_LABELS[c]}: {counts_with_id[c]}"
+                      for c in _UNDECLARED_CATEGORIES))
+
+
+def _run_undeclared_scope(df, label, filename_prefix, out_dir,
+                          restrict_service_type=None):
+    """
+    Run both deliverables for one scope label (a context, or one service
+    type). Produces the two per-day plots, per-day averages, and the
+    month-wide printout.
+
+    restrict_service_type: None for the general/combined case; a service-type
+      string for a per-service-type breakdown (classify only nodes that
+      served it, using the full graph, weight 1 each).
+    """
+    days = _chronological_days(df)
+    if not days:
+        print(f"[UNDECLARED-INFO] No days for {label}; skipping.")
+        return
+
+    per_day_no_id, per_day_with_id = [], []
+    for day in days:
+        day_df = df[df["date"] == day]
+        if restrict_service_type is not None:
+            restrict_fps = set(day_df[day_df["service_type"] == restrict_service_type]["fingerprint"].unique())
+            if not restrict_fps:
+                per_day_no_id.append({c: 0 for c in _UNDECLARED_CATEGORIES})
+                per_day_with_id.append({c: 0 for c in _UNDECLARED_CATEGORIES})
+                continue
+            c_no, c_with = _undeclared_counts_for_scope(day_df, weight_restrict_fps=restrict_fps)
+        else:
+            c_no, c_with = _undeclared_counts_for_scope(day_df)
+        per_day_no_id.append(c_no)
+        per_day_with_id.append(c_with)
+
+    _plot_undeclared(
+        days, per_day_no_id,
+        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_no_ID.png"),
+        title=f"Undeclared families (no-ID-focused) — {label}")
+    _plot_undeclared(
+        days, per_day_with_id,
+        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_with_ID.png"),
+        title=f"Undeclared families (with-ID-focused) — {label}")
+
+    n_days = len(days)
+    print(f"\n[UNDECLARED] {label} — per-day averages ({n_days} days)")
+    _print_undeclared_averages(per_day_no_id, n_days, label, "no-ID-focused")
+    _print_undeclared_averages(per_day_with_id, n_days, label, "with-ID-focused")
+
+    # Month-wide: one combined graph over the whole scope df.
+    if restrict_service_type is not None:
+        restrict_fps = set(df[df["service_type"] == restrict_service_type]["fingerprint"].unique())
+        mc_no, mc_with = _undeclared_counts_for_scope(
+            df, weight_restrict_fps=restrict_fps, most_recent_id=True)
+    else:
+        mc_no, mc_with = _undeclared_counts_for_scope(df, most_recent_id=True)
+    _print_undeclared_monthwide(mc_no, mc_with, label)
+
+
+def undeclared_families_distribution(df, context_label):
+    """
+    Undeclared-family mutual-graph analysis (§2-§5). Builds a per-day mutual
+    (bidirectional) family graph from `declared_family`, classifies focus
+    nodes by their mutual neighbors' declared_family_id status into three
+    categories, and produces:
+      * Deliverable A (no-ID-focused): focus = declared_family_id == "None".
+      * Deliverable B (with-ID-focused): focus = declared_family_id != "None",
+        same-family-ID neighbors excluded first.
+    Per-day line plots (one per deliverable) + per-day averages, plus a
+    month-wide whole-scope six-count printout (no plot).
+
+    General case runs for both "network" and "tracked". For "tracked",
+    repeats per service_type using the FULL day's/month's graph but
+    classifying only nodes that served that service type (§2 scoping); the
+    combined "tracked" run applies the overlap rule at tally time (a node
+    serving N service types contributes N to its category).
+
+    Ghost filter is the stricter consecutive_hourly_absences == 0 (NaN kept).
+    """
+    out_dir = os.path.join("analysis-results", "undeclared-families")
+
+    if df is None or df.empty:
+        print(f"[UNDECLARED-ERROR] Missing data slice for context '{context_label}'.")
+        return
+    required = {"fingerprint", "declared_family", "declared_family_id", "date"}
+    if not required.issubset(df.columns):
+        print(f"[UNDECLARED-INFO] Required columns missing for {context_label}; skipping.")
+        return
+
+    df = _undeclared_ghost_filter(df)
+    if df.empty:
+        print(f"[UNDECLARED-INFO] No rows survive the ghost filter for {context_label}; skipping.")
+        return
+
+    print(f"\n[UNDECLARED] Undeclared-family analysis — {context_label}")
+    _run_undeclared_scope(df, context_label, context_label, out_dir)
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            if df[df["service_type"] == st].empty:
+                print(f"[UNDECLARED-INFO] No rows for service_type '{st}'; skipping.")
+                continue
+            _run_undeclared_scope(df, f"tracked — {st}", st.lower(), out_dir,
+                                  restrict_service_type=st)
+
+
+# ---------------------------------------------------------------------------
+# HSDir action-rate distribution (Deliverable A) and stripped-flag churn
+# (Deliverable B)
+# ---------------------------------------------------------------------------
+
+def _action_overlap_key(df, id_col, dedupe_on_service_type):
+    """
+    Entity-key Series for the action-rate analysis: (id_col, service_type)
+    tuples under the overlap rule when dedupe_on_service_type is set and
+    service_type exists, else id_col alone. Generalizes the established
+    (fingerprint, service_type) pattern to id_col == "hsdir_fingerprint"
+    (ring-event schema's relay identifier).
+    """
+    if dedupe_on_service_type and "service_type" in df.columns:
+        return list(zip(df[id_col], df["service_type"].astype(str)))
+    return df[id_col]
+
+
+def _aggregate_action_rates(scope_df, id_col, time_col, dedupe_on_service_type):
+    """
+    Point-1 aggregate: per (entity, time_bucket) counts first (so the overlap
+    dedup is correct -- an event is attributed to a specific entity before
+    entities are deduplicated), then summed across all entities to one
+    network-wide rate per (action, time_bucket).
+
+    rate(action, t) = (events of that action at t, summed across entities)
+                      / (all events at t, summed across entities).
+
+    Because summing per-entity counts across entities is arithmetically the
+    same as counting events with each event attributed once per distinct
+    entity key, and every ring-event row maps to exactly one entity key, the
+    per-entity-first framing here reduces to grouping rows by
+    (entity_key, time, action). Returns {action: {time_bucket: rate_fraction}}.
+    """
+    work = scope_df.copy()
+    work["_entity_key"] = _action_overlap_key(work, id_col, dedupe_on_service_type)
+
+    # events per (time, action) -- each row is one event, attributed to its
+    # entity key (the dedup unit); counts summed across entities == row counts
+    # grouped by (time, action), since one row == one entity-attributed event.
+    per_time_action = work.groupby([time_col, "action"]).size()
+    per_time_total = work.groupby(time_col).size()
+
+    actions = sorted(work["action"].astype(str).unique())
+    rates = {a: {} for a in actions}
+    for (t, action), cnt in per_time_action.items():
+        total = per_time_total.get(t, 0)
+        rates[str(action)][t] = (cnt / total) if total else 0.0
+    return rates
+
+
+def _onion_averaged_action_rates(scope_df, id_col, time_col, dedupe_on_service_type):
+    """
+    Point-2 onion-averaged view: compute each onion's OWN aggregate rate
+    (same per-entity-then-aggregate method as _aggregate_action_rates, scoped
+    to that onion's events), then average those per-onion rates UNWEIGHTED
+    across onions -- one action/time at a time. An onion with many events
+    does not get more influence than one with few (deliberately different
+    from point 1's event-count-weighted network aggregate).
+
+    Returns {action: {time_bucket: mean_of_per_onion_rates}}.
+    """
+    if "onion_address" not in scope_df.columns:
+        return {}
+    onions = [o for o in scope_df["onion_address"].astype(str).unique() if o not in ("None", "")]
+    if not onions:
+        return {}
+
+    # The full action vocabulary across this scope. Every onion contributes a
+    # rate for every action ONLY within the time buckets where it was actually
+    # active (had >=1 event): there it gets its computed rate, or 0.0 for an
+    # action it produced none of. An onion is NOT forced to contribute 0.0 to
+    # a time bucket it had no events in at all -- it simply has no rate there,
+    # so it is excluded from that bucket's average (which would otherwise be
+    # dragged down by onions that were merely absent, not underperforming).
+    all_actions = sorted(scope_df["action"].astype(str).unique())
+
+    # accum[action][t] = list of per-onion rates (one per onion active at t).
+    accum = {a: {} for a in all_actions}
+    for onion in onions:
+        onion_df = scope_df[scope_df["onion_address"].astype(str) == onion]
+        if onion_df.empty:
+            continue
+        onion_rates = _aggregate_action_rates(onion_df, id_col, time_col, dedupe_on_service_type)
+        active_buckets = set(onion_df[time_col].astype(str).unique())
+        for t in active_buckets:
+            for action in all_actions:
+                r = onion_rates.get(action, {}).get(t, 0.0)
+                accum[action].setdefault(t, []).append(r)
+
+    averaged = {}
+    for action, tmap in accum.items():
+        averaged[action] = {t: (sum(vals) / len(vals) if vals else 0.0)
+                            for t, vals in tmap.items()}
+    return averaged
+
+
+def _print_action_rates(label, rates_hour, rates_day, view_name):
+    """Print each action's hour-rate and day-rate as percentages, averaged
+    across the time buckets for a compact single-number-per-action summary."""
+    actions = sorted(set(rates_hour) | set(rates_day))
+    if not actions:
+        print(f"    [{label}] {view_name}: no qualifying events.")
+        return
+    print(f"    [{label}] {view_name}:")
+    for action in actions:
+        hvals = list(rates_hour.get(action, {}).values())
+        dvals = list(rates_day.get(action, {}).values())
+        h = (sum(hvals) / len(hvals)) if hvals else 0.0
+        d = (sum(dvals) / len(dvals)) if dvals else 0.0
+        print(f"        {action}: hour-rate {h:.2%}, day-rate {d:.2%}")
+
+
+def _run_action_rate_scope(scope_df, label, dedupe_on_service_type):
+    """Run both views (fingerprint aggregate + onion-averaged) for one scope."""
+    if scope_df is None or scope_df.empty:
+        print(f"    [{label}] no qualifying events; skipping.")
+        return
+    # Point 1: fingerprint-based network aggregate.
+    agg_hour = _aggregate_action_rates(scope_df, "hsdir_fingerprint", "hour", dedupe_on_service_type)
+    agg_day = _aggregate_action_rates(scope_df, "hsdir_fingerprint", "date", dedupe_on_service_type)
+    _print_action_rates(label, agg_hour, agg_day, "fingerprint-aggregate")
+
+    # Point 2: onion-averaged view (never dedupes on service type -- an onion
+    # belongs to one service type; the average is over onions, not entities).
+    onion_hour = _onion_averaged_action_rates(scope_df, "hsdir_fingerprint", "hour", False)
+    onion_day = _onion_averaged_action_rates(scope_df, "hsdir_fingerprint", "date", False)
+    _print_action_rates(label, onion_hour, onion_day, "onion-averaged")
+
+
+def hsdir_action_rate_distribution(df, context_label):
+    """
+    Deliverable A. Distribution of ring-event `action` types as rates, over
+    df_ring_events. context_label is "tracked" in practice (ring events exist
+    only for tracked targets); the parameter is kept for interface parity but
+    there is no "network" branch.
+
+    Two views, both printed (terminal only, no plot):
+      * fingerprint-aggregate (point 1): per (hsdir_fingerprint [, service_type
+        under the overlap rule], time-bucket) counts summed across entities to
+        one network-wide rate per (action, hour) and (action, day) --
+        "what fraction of all events network-wide were of this action type."
+      * onion-averaged (point 2): each onion's own aggregate rate, then an
+        UNWEIGHTED average across onions -- "on average, what a typical onion's
+        rate looks like" (an onion with many events gets no extra weight).
+
+    For "tracked", both views repeat per service_type: the fingerprint
+    aggregate applies the (hsdir_fingerprint, service_type) overlap rule, and
+    the onion-average is taken over only that service type's onions.
+    """
+    if df is None or df.empty:
+        print(f"[ACTION-RATE-ERROR] Missing/empty ring-event data for '{context_label}'.")
+        return
+    required = {"hsdir_fingerprint", "action", "onion_address", "date", "hour"}
+    if not required.issubset(df.columns):
+        print(f"[ACTION-RATE-INFO] Required columns missing for {context_label}; skipping.")
+        return
+
+    print(f"\n[ACTION-RATE] HSDir action-rate distribution — {context_label}")
+
+    # General case: combined overlap-rule aggregate + all-onion average.
+    _run_action_rate_scope(df, context_label, dedupe_on_service_type=(context_label == "tracked"))
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in df["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = df[df["service_type"] == st]
+            if sub.empty:
+                print(f"[ACTION-RATE-INFO] No events for service_type '{st}'; skipping.")
+                continue
+            # Within one service type the overlap key collapses to fingerprint
+            # alone; keep dedupe on for consistency (no-op within a type).
+            _run_action_rate_scope(sub, f"tracked — {st}", dedupe_on_service_type=True)
+
+
+# ---------------------------------------------------------------------------
+# Deliverable B — stripped-flag churn
+# ---------------------------------------------------------------------------
+
+# The six non-HSDir flags whose presence at the moment of stripping is
+# characterized (HSDir itself is by definition absent in a STRIPPED_HSDIR_FLAG
+# row, so it is not among them).
+_STRIPPED_CHURN_FLAGS = ("Fast", "Guard", "Running", "Stable", "V2Dir", "Valid")
+
+
+def _stripped_overlap_key(df, dedupe_on_service_type):
+    """(fingerprint, service_type) under the overlap rule, else fingerprint."""
+    if dedupe_on_service_type and "service_type" in df.columns:
+        return list(zip(df["fingerprint"], df["service_type"].astype(str)))
+    return df["fingerprint"]
+
+
+def _flag_presence_per_event(stripped_df):
+    """
+    Single-snapshot presence: for each STRIPPED_HSDIR_FLAG row, whether each
+    of the six flags is present in THAT row's own flags list. Rows with a
+    malformed/non-list flags value are skipped (not errored).
+
+    Returns a DataFrame with one bool column per flag (index-aligned to the
+    kept rows), plus a "_kept_index" list of the original indices kept.
+    """
+    records = []
+    kept_index = []
+    for idx, flags in zip(stripped_df.index, stripped_df["flags"]):
+        if not isinstance(flags, list):
+            continue  # malformed -> skip this row for flag-presence
+        flag_set = set(flags)
+        records.append({flag: (flag in flag_set) for flag in _STRIPPED_CHURN_FLAGS})
+        kept_index.append(idx)
+    presence = pd.DataFrame(records, index=kept_index)
+    return presence, kept_index
+
+
+def _run_stripped_flag_scope(stripped_df, label):
+    """Compute + print month-wide and per-day flag-presence % (terminal only;
+    no plot -- the aggregate percentages are fully conveyed by the printout,
+    so a bar chart would only restate them)."""
+    presence, kept = _flag_presence_per_event(stripped_df)
+    n = len(presence)
+    if n == 0:
+        print(f"    [{label}] no stripped-events with parseable flags; skipping.")
+        return
+
+    # Month-wide presence % per flag.
+    pct_by_flag = {f: float(presence[f].mean()) for f in _STRIPPED_CHURN_FLAGS}
+    print(f"    [{label}] {n} stripped-events — month-wide flag presence at strip time:")
+    for f in _STRIPPED_CHURN_FLAGS:
+        print(f"        {f}: {pct_by_flag[f]:.2%}")
+
+    # Per-day presence % (cheap add-on).
+    kept_df = stripped_df.loc[kept]
+    presence_with_day = presence.copy()
+    presence_with_day["date"] = kept_df["date"].values
+    days = _chronological_days(kept_df)
+    if days:
+        print(f"    [{label}] per-day flag presence at strip time:")
+        for day in days:
+            day_mask = presence_with_day["date"] == day
+            d_n = int(day_mask.sum())
+            if d_n == 0:
+                continue
+            parts = ", ".join(
+                f"{f}: {presence_with_day.loc[day_mask, f].mean():.0%}"
+                for f in _STRIPPED_CHURN_FLAGS)
+            print(f"        {day} (n={d_n}): {parts}")
+
+
+def hsdir_stripped_flag_churn_distribution(df, context_label):
+    """
+    Deliverable B. Characterizes what OTHER flags a node still carries at the
+    moment its HSDir flag is stripped -- a different question from
+    hsdir_churn_distributions' stripped-churn series (which counts how OFTEN
+    stripping happens over time); this one asks what else is going on flag-wise
+    when it happens.
+
+    Metric choice -- SINGLE-SNAPSHOT PRESENCE (documented per §3.2): for each
+    STRIPPED_HSDIR_FLAG row, check whether each of the six non-HSDir flags
+    (Fast, Guard, Running, Stable, V2Dir, Valid) is still present in that same
+    row's flags list, and report the percentage of stripped-events where each
+    is present. Chosen over the temporal before/after approach because the
+    diagnostic goal is to distinguish an HSDir-specific loss (other flags
+    still present -> only HSDir went) from a broader simultaneous flag-loss
+    event (multiple flags gone at once) -- that distinction is a property of
+    the strip-moment snapshot itself, read directly from one row, with no
+    dependence on a prior non-stripped observation (which may not exist for a
+    node first seen already-stripped).
+
+    Filter: status == "STRIPPED_HSDIR_FLAG" (the simpler of the two equivalent
+    filters; verified against the sample that every such row has
+    consecutive_hourly_absences == 1, so the status-only filter matches the
+    earlier combined convention).
+
+    Prints month-wide and per-day presence % (terminal only -- no plot; the
+    aggregate percentages are fully conveyed by the printout, so a chart would
+    only restate them). For "tracked", repeats per service_type (overlap rule
+    on (fingerprint, service_type)).
+    """
+    if df is None or df.empty:
+        print(f"[FLAG-CHURN-ERROR] Missing/empty data for '{context_label}'.")
+        return
+    required = {"status", "flags", "fingerprint", "date"}
+    if not required.issubset(df.columns):
+        print(f"[FLAG-CHURN-INFO] Required columns missing for {context_label}; skipping.")
+        return
+
+    stripped = df[df["status"].astype(str) == "STRIPPED_HSDIR_FLAG"]
+
+    print(f"\n[FLAG-CHURN] Stripped-flag churn — {context_label}")
+    if stripped.empty:
+        print(f"    [{context_label}] no STRIPPED_HSDIR_FLAG rows; skipping.")
+        return
+
+    _run_stripped_flag_scope(stripped, context_label)
+
+    if context_label == "tracked" and "service_type" in df.columns:
+        service_types = sorted(
+            t for t in stripped["service_type"].dropna().unique() if t not in ("None", "")
+        )
+        for st in service_types:
+            sub = stripped[stripped["service_type"] == st]
+            if sub.empty:
+                print(f"[FLAG-CHURN-INFO] No stripped-events for service_type '{st}'; skipping.")
+                continue
+            _run_stripped_flag_scope(sub, f"tracked — {st}")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("""
@@ -2444,165 +4448,83 @@ if __name__ == "__main__":
     print("="*60)
     print("PROCESSING CAPACITY STABILITY ANALYSIS")
     print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_stability_matrices(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_stability_matrices(df_track_consensus, context_label="tracked_targets")
 
-    if df_rot_net is not None:
-        calculate_stability_matrices(df_rot_net, context_label="rotated_network_wide")
+    # Sybil-distribution analysis only needs the network-wide and tracked
+    # consensus DataFrames (ring events / rotated snapshots aren't inputs
+    # to either function below, and may not be present for every run).
+    if df_net_consensus is not None and df_track_consensus is not None:
+        family_id_sybil_distributions(df_net_consensus, "network")
+        family_id_sybil_distributions(df_track_consensus, "tracked")
+        ip_sybil_distributions(df_net_consensus, "network")
+        ip_sybil_distributions(df_track_consensus, "tracked")
+        service_type_overlap_diagnostic(df_track_consensus, "tracked")
+        family_id_entity_drops_distributions(df_net_consensus, "network")
+        family_id_entity_drops_distributions(df_track_consensus, "tracked")
+        ip_entity_drops_distributions(df_net_consensus, "network")
+        ip_entity_drops_distributions(df_track_consensus, "tracked")
+        # hrt_uniformity_distributions does its own ghost-node filtering
+        # internally, so it takes the unfiltered consensus DataFrames.
+        hrt_uniformity_distributions(df_net_consensus, "network")
+        hrt_uniformity_distributions(df_track_consensus, "tracked")
+        # hrt_index_coverage_distributions likewise does its own ghost-node
+        # filtering internally; it covers only the two hex ring-index metrics.
+        hrt_index_coverage_distributions(df_net_consensus, "network")
+        hrt_index_coverage_distributions(df_track_consensus, "tracked")
+        # hsdir_churn_distributions applies its own stricter ghost filter
+        # (consecutive_hourly_absences == 0) internally, so it also takes
+        # the unfiltered consensus DataFrames.
+        hsdir_churn_distributions(df_net_consensus, "network")
+        hsdir_churn_distributions(df_track_consensus, "tracked")
+        # Undeclared-family mutual-graph analysis; applies its own stricter
+        # == 0 ghost filter internally, so it takes the raw DataFrames.
+        undeclared_families_distribution(df_net_consensus, "network")
+        undeclared_families_distribution(df_track_consensus, "tracked")
+        # Deliverable A: action-rate distribution on ring events (tracked-only).
+        if df_ring_events is not None:
+            hsdir_action_rate_distribution(df_ring_events, "tracked")
+        else:
+            print("[ANALYSIS-WARNING] ring-event DataFrame unavailable; "
+                  "skipping action-rate distribution.")
+        # Deliverable B: stripped-flag churn on the consensus DataFrames.
+        hsdir_stripped_flag_churn_distribution(df_net_consensus, "network")
+        hsdir_stripped_flag_churn_distribution(df_track_consensus, "tracked")
+        # Uptime-matrix and hourly-uptime-duration analyses; both apply the
+        # standard ghost filter internally, so they take the raw DataFrames.
+        hsdir_uptime_distributions(df_net_consensus, "network")
+        hsdir_uptime_distributions(df_track_consensus, "tracked")
+        hsdir_hourly_uptime_distributions(df_net_consensus, "network")
+        hsdir_hourly_uptime_distributions(df_track_consensus, "tracked")
+        # sybil_relay_*_changes apply their own stricter ghost filter
+        # (consecutive_hourly_absences == 0) internally, so they also take
+        # the unfiltered consensus DataFrames.
+        sybil_relay_fingerprint_changes(df_net_consensus, "network")
+        sybil_relay_fingerprint_changes(df_track_consensus, "tracked")
+        sybil_relay_family_id_changes(df_net_consensus, "network")
+        sybil_relay_family_id_changes(df_track_consensus, "tracked")
+        sybil_relay_ip_changes(df_net_consensus, "network")
+        sybil_relay_ip_changes(df_track_consensus, "tracked")
+    else:
+        print("[ANALYSIS-WARNING] network and/or tracked consensus DataFrame "
+              "unavailable; skipping sybil distribution analysis.")
 
-    if df_rot_track is not None:
-        calculate_stability_matrices(df_rot_track, context_label="rotated_tracked_targets")
+    # Rotated-node stability analysis only needs the rotated DataFrames.
+    if df_rot_net is not None and df_rot_track is not None:
+        daily_rotated_nodes_stability_distributions(df_rot_net, "rotated_network")
+        daily_rotated_nodes_stability_distributions(df_rot_track, "rotated_tracked")
+    else:
+        print("[ANALYSIS-WARNING] rotated network and/or tracked DataFrame "
+              "unavailable; skipping rotated-node stability analysis.")
 
-    print("="*60)
-    print("PROCESSING HRT ONION-TO-HSDIR SPATIAL DISTRIBUTION ANALYSIS")
-    print("="*60)
-    
-    if df_track_consensus is not None:
-        calculate_hrt_onion_to_hsdir_distribution(df_track_consensus, context_label="tracked_targets")
-        
-    if df_rot_track is not None:
-        calculate_hrt_onion_to_hsdir_distribution(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING HRT INDEX TERTILE DISTRIBUTIONS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_hrt_index_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_hrt_index_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_hrt_index_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_hrt_index_distributions(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING SYBIL IP PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_sybil_pattern_ip_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_sybil_pattern_ip_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_sybil_pattern_ip_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_sybil_pattern_ip_distributions(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING SYBIL FAMILY ID PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_sybil_family_id_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_sybil_family_id_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_sybil_family_id_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_sybil_family_id_distributions(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING SYBIL FAMILY LIST PATTERN AND OPERATOR INFRASTRUCTURE ANALYSIS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_sybil_family_list_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_sybil_family_list_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_sybil_family_list_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_sybil_family_list_distributions(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING HSDIR UPTIME DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_hsdir_uptime_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_hsdir_uptime_distributions(df_track_consensus, context_label="tracked_targets")
-
-    print("="*60)
-    print("PROCESSING CHURN RECONNECTION DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-    
-    if df_net_consensus is not None:
-        calculate_hsdir_reconnect_churn_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_hsdir_reconnect_churn_distributions(df_track_consensus, context_label="tracked_targets")
-
-    print("="*60)
-    print("PROCESSING RARE-STRANGE TRACKED HSDIR BEHAVIOR DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-        
-    if df_track_consensus is not None:
-        calculate_rare_tracked_hsdir_behaviour_distributions(df_track_consensus, df_ring_events, context_label="tracked_targets")
-
-    print("="*60)
-    print("PROCESSING RING ACTION DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-        
-    if df_track_consensus is not None:
-        calculate_ring_action_distributions(df_ring_events, context_label="tracked_targets")
-
-    print("="*60)
-    print("PROCESSING RING ACTION REASON DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-        
-    if df_track_consensus is not None:
-        calculate_ring_action_reason_distributions(df_ring_events, context_label="tracked_targets")
-
-    print("="*60)
-    print("PROCESSING IP OPERATOR DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-        
-    if df_net_consensus is not None:
-        calculate_ip_entity_operators_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_ip_entity_operators_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_ip_entity_operators_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_ip_entity_operators_distributions(df_rot_track, context_label="rotated_tracked_targets")
-
-    print("="*60)
-    print("PROCESSING FAMILY ID OPERATOR DISTRIBUTIONS ANALYSIS")
-    print("="*60)
-        
-    if df_net_consensus is not None:
-        calculate_family_id_entity_operators_distributions(df_net_consensus, context_label="network_wide")
-        
-    if df_track_consensus is not None:
-        calculate_family_id_entity_operators_distributions(df_track_consensus, context_label="tracked_targets")
-
-    if df_rot_net is not None:
-        calculate_family_id_entity_operators_distributions(df_rot_net, context_label="rotated_network_wide")
-
-    if df_rot_track is not None:
-        calculate_family_id_entity_operators_distributions(df_rot_track, context_label="rotated_tracked_targets")
+    # BPK upload/fetch persistence analyses only need the ring-event log.
+    # context_label is fixed to "tracked" (ring events exist only for
+    # tracked onions).
+    if df_ring_events is not None:
+        bpks_uf_persistance(df_ring_events, "tracked")
+        bpks_hour_uf_persistance(df_ring_events, "tracked")
+        bpks_not_upload_fetch_distributions(df_ring_events, "tracked")
+    else:
+        print("[ANALYSIS-WARNING] ring-event DataFrame unavailable; "
+              "skipping bpk upload/fetch persistence analysis.")
 
     print("="*60)
     print("ANALYSIS COMPLETED SUCCESSFULLY. ALL MATRIX ARTIFACTS EXPORTED.")
