@@ -243,65 +243,65 @@ onion services descriptors and network-wide HSDirs available on the network, to 
 hosting HSDirs (Tor relays) on the Tor network. 
 
 %TODO: Explanation of what it's been done and part of the results
-\section{Tor's Onion Service V3 Protocol and Mechanism}
+\section{Background}
 
 This section presents the Tor's onion service V3 protocol with an overview of the essential parties of the
-mechanism, including the onion services address generation, publication and indexing, and connection establishment. %(TODO: USE TOR OFFICIAL DOCS AS REF)
+mechanism, including the onion services address generation, publication and indexing, and connection establishment \cite{tor_rendspec, tor_onion_overview}.
 
-\subsection{Mechanism and Protocol Overview}%TODO: Add references from Tor's official sources and infographics
+\subsection{Mechanism and Protocol Overview}
 
 The architectural ecosystem of the Tor version 3 (V3) onion service protocol implements a decentralized framework designed to facilitate mutual anonymized application-layer
 communication for both the client and the service provider while masking the identities and locations of both endpoints. Different from centralized domain registries, the V3
 architecture operates entirely within the Tor relay network, managing connections through a specialized set of relays avoiding direct network visilibility of both endpoints.
-The public service address is splitted from their current IP routing path with a transient overlay and a multi-hop circuit. The framework relies essential in the interaction
-of six operational entities distributed across the network:
+The public service address is splitted from their current IP routing path with a transient overlay and a multi-hop circuit \cite{dingledine2004tor}. The framework relies essential in the interaction
+of six operational entities distributed across the network \cite{tor_rendspec, tor_onion_overview}:
 
 \begin{enumerate}
     \item \textbf{Tor Client:} The end-user application seeking to establish an authenticated, secure connection to the onion service without disclosing its own identity. Commonly a local proxy dawmon that encapsulates the traffic, handles keys exchanges and establishes multi-hop virtual paths to mask the origins requests.
     \item \textbf{Onion Service:} The destination instance and isolated server hosting a service or application endpoints that listen uniquely to incoming traffic through a pre-arranged anonymous path while preserving the confidentility of its public IP address and network topology.
-    \item \textbf{Directory Authorities:} A cluster of core trusted infrastructure server nodes that collaboratively manage and monitor the network consensus status, calculate the daily Shared Random Values (SRVs), and issue the the network consensus directory each hour required for layout lookups. 
+    \item \textbf{Directory Authorities:} A cluster of core trusted infrastructure server nodes that collaboratively manage and monitor the network consensus status, calculate the daily Shared Random Values (SRVs), and issue the the network consensus directory each hour required for layout lookups \cite{tor_dirspec, tor_srvspec}.
     \item \textbf{Introduction Point - IPO:} A set of publicly accessible Tor relays arbitrarily selected by the onion service to maintain long-lived and persistent circuits. The operational duty of these nodes is to accept received incoming initialization requests from clients and proxying them to the service via pre-established circuits without knowing its actual location.
-    \item \textbf{Hidden Service Directory - HSDir:} A dynamic subset of Tor relays that meet strict stability and uptime criteria. These nodes are authorized to store and serve signed cryptographic service descriptors within a decentralized and time dependent Distributed Hash Table (DHT) structure known as Hash Ring.
+    \item \textbf{Hidden Service Directory - HSDir:} A dynamic subset of Tor relays that meet strict stability and uptime criteria. These nodes are authorized to store and serve signed cryptographic service descriptors within a decentralized and time dependent Distributed Hash Table (DHT) structure known as Hash Ring \cite{tor_rendspec, tor_dirspec}.
     \item \textbf{Rendezvous Point - RPO:} Ephemeral relays dynamically chosen by the client on the spot. These nodes act as the neutral nexus where the circuit branches from the client and service safely converge.
 \end{enumerate}
 
 %(INCLUDE IMAGE THAT EXPLAINS THE NETWORK)
 
-The chronological lifecycle required to establish an end-to-end connection between the client and a V3 onion service transitions through a six cryptographic and operational stages:
+The chronological lifecycle required to establish an end-to-end connection between the client and a V3 onion service transitions through a six cryptographic and operational stages \cite{tor_rendspec, tor_onion_overview}:
 
 \begin{enumerate}
     \item \textbf{IPO Setup:} Upon initialization, the V3 onion service generates its root identity key pairs, derives its cryptographic \texttt{.onion} address and establishes individual three-hop circuits to multiple chosen public relays to act as active IPOs.
-    \item \textbf{Descriptor Publication:} The service generates an onion service descriptor containing its public verification keys and the network routing parameters of its IPOs. This document is cryptographically signed using an Ed25519 key-blinding mechanism that daily rotates, and uploaded to a default of eight designated HSDir positions derived methematically on the Hash Ring.
+    \item \textbf{Descriptor Publication:} The service generates an onion service descriptor containing its public verification keys and the network routing parameters of its IPOs. This document is cryptographically signed using an Ed25519 key-blinding mechanism that daily rotates, and uploaded to a default of eight designated HSDir positions derived mathematically on the Hash Ring.
     \item \textbf{Discovery and Descriptor Retrieval:} The client to reach the target onion address queries the active network consensus along the global SRV to pinpoint and compute the exact HSDir relays responsible of hosting the service's current descriptor and downloading the authenticated record over an anonymous circuit.
     \item \textbf{Rendezvous Establishment:} The client designates an independent Tor relay from the active consensus pool to act as RPO, builds a separate three-hoop circuit to it and establish a single-use cryptographic secret denominated as rendezvous cookie.
     \item \textbf{Introduction Delivery:} The client dispatches an encrypted cell (\texttt{INTRODUCE1}), containing the RPO routing descriptors and the rendezvous cookie and encrypted using the service's public key, to one of the service's published IPOs, which blindly forwards it through its pre-established circuit to the hidden service.
     \item \textbf{Circuit Splicing:} Upon decrypting the cell, the onion service parses the IPO cell, establishes a newly three-hop circuit to the specified RPO and handovers a validation via a (\texttt{RENDEZVOUS1}) cell. The RPO then confirms the cookie matches and joints the two independent streams into a unified six-hop end-to-end circuit.
 \end{enumerate}
 
-\subsection{Address Generation}%TODO: Add references from Tor's official sources and infographics
+\subsection{Address Generation}
 
 The Tor version 3 (V3) onion routing introduces a more cryptographically and decentralized naming convention replacing the legacy 16-character version 2 (V2) address space which derivation introduced significant cryptographic
-vulnerabilities including partial-match dictionary collisions, namespace harvesting and lack of support for forward-secure operations. The V3 protocol remediates these vulnerabilities by transitioning to Ed25519 elliptic curve
+vulnerabilities including partial-match dictionary collisions, namespace harvesting and lack of support for forward-secure operations \cite{tor_v2_deprecation, biryukov2013trawling}. The V3 protocol remediates these vulnerabilities by transitioning to Ed25519 elliptic curve
 cryptography mapping the public key directly into the string encoding of the public identifier serving as self-authentication. This shift increases the \texttt{.onion} address length into a 56-character base32-encoded string,
-eliminating central name authorities dependencies and preventing unauthorized directory harversting from mapping or enumerating hidden application endpoints while proving ownership.
+eliminating central name authorities dependencies and preventing unauthorized directory harversting from mapping or enumerating hidden application endpoints while proving ownership \cite{tor_rendspec}.
 
-The generation of a valid V3 onion address consists in the congregation of a 35-byte binary payload composed of three crucial fields, then serialized using Base32 encoding:
+The generation of a valid V3 onion address consists on the congregation of a 35-byte binary payload composed of three crucial fields, then serialized using Base32 encoding \cite{tor_rendspec}:
 
 \begin{enumerate}
-    \item \textbf{Master Public Key (32 bytes):} The Ed25519 master public key ($\mathcal{P}_{k}$) generated by the onion service during its initialization phase and root identity of the hidden service.
-    \item \textbf{Verification Checksum (2 bytes):} A truncated security chunk ($\mathcal{C}_{s}$) calculated derived from cryptographic hash function to ensure string integrity and protect against typos or transmission distortions.
-    \item \textbf{Protocol Version (1 byte):} A fixed administrative byte ($\mathcal{V}$) indicating the technical generation of the protocol explicitly configured to \texttt{0x03} for Tor version 3 (V3).
+    \item \textbf{Master Public Key (32 bytes):} The Ed25519 master public key ($\textit{P}_{k}$) generated by the onion service during its initialization phase and root identity of the hidden service.
+    \item \textbf{Verification Checksum (2 bytes):} A truncated security chunk ($\textit{C}_{s}$) calculated derived from cryptographic hash function to ensure string integrity and protect against typos or transmission distortions.
+    \item \textbf{Protocol Version (1 byte):} A fixed administrative byte ($\textit{V}$) indicating the technical generation of the protocol explicitly configured to \texttt{0x03} for Tor version 3 (V3).
 \end{enumerate}
 
 To calculate the 2-byte verification checksum, the protocol combines a predefined static string \texttt{".onion checksum"} as a fixed salt, the 32-byte master public key, and the the protocol version byte into a unified byte stream. 
-The stream is processed using the SHA3-256 hashing algorithm, which resulting digest is truncated to its first two bytes:
+The stream is processed using the SHA3-256 hashing algorithm, which resulting digest is truncated to its first two bytes \cite{tor_rendspec}:
 \begin{equation}
-\mathcal{C}_{\text{s}} = \text{SHA3-256}\big(\textit{".onion checksum"} \parallel \mathcal{P}_{\text{k}} \parallel \mathcal{V}\big)\big[:2\big]
+\mathcal{C}_{\text{s}} = \text{SHA3-256}\big(\textit{".onion checksum"} \parallel \textit{P}_{\text{k}} \parallel \textit{V}\big)\big[:2\big]
 \end{equation}
-Once the checksum ($\mathcal{C}_{\text{s}}$) is derived, it is appended to the master public key and the protocol version byte to construct the 35-byte vector. The resulting domain name is produced by converting the 
+Once the checksum ($\textit{C}_{\text{s}}$) is derived, it is appended to the master public key and the protocol version byte to construct the 35-byte vector. The resulting domain name is produced by converting the 
 byte vector into an Base32 sequence with the domain suffix appended:
 \begin{equation}
-\mathcal{A}_{\text{onion}} = \text{Base32}\big(\mathcal{P}_{\text{k}} \parallel \mathcal{C}_{\text{s}} \parallel \mathcal{V}\big) \parallel \textit{".onion"}
+\mathcal{A}_{\text{onion}} = \text{Base32}\big(\textit{P}_{\text{k}} \parallel \textit{C}_{\text{s}} \parallel \textit{V}\big) \parallel \textit{".onion"}
 \end{equation}
 %TODO: Illustration
 
@@ -309,55 +309,55 @@ This infrastructure produces direct implications for network telemetry and monit
 can extract the inherent cryptographic key. The master identity key acts as the fundamental parameter to calculate daily blinded keys, which govern the exact time dependent coordinates the service will occupy on the network's HRT
 over the given lifecycle.
 
-\subsection{Publication and Indexing}%TODO: Add references from Tor's official sources and infographics
+\subsection{Publication and Indexing}
 
-To shield hidden services from targeted denial-of-service (DoS) vectors and metadata harversting by adversary directory servers, the Tor version 3 (V3) introduces a key-blinding subsystem along a consistent distributed hashing topology. 
+To shield hidden services from targeted denial-of-service (DoS) vectors and metadata harversting by adversary directory servers \cite{biryukov2013trawling}, the Tor version 3 (V3) introduces a key-blinding subsystem along a consistent distributed hashing topology \cite{tor_rendspec}.
 Rather than uploading static routing records to fixed servers, V3 onion services routinely rotates ephemeral blinded public keys ($\textit{K}_{b}$) to dynamically compute a set of time dependent storage nodes within the HRT. Services
 ensure confidentiality by serializing active routing vectors and cryptographic information in a structural document known as onion descriptor, protected with an architectural encryption to prevent intermediate nodes from harvesting onion addresses
 or identify the services being hosted by it unless they already posses the corresponding credentials.
 
-The derivation of blinded credentials, spatial positioning and temporal rotation descriptors accross the global HRT shifts are governed by two synchronized parameters daily updated within the network consensus, the global SRV and the time period, or temporal epoch. 
-The consensus cluster of directory authorities produce a newly generated SRV every consecutive interval (epoch) defined by the consensus parameter \texttt{hsdir-interval}, which defaults to an operational duration of 1440 minutes (24 hours), at 00:00 UTC over hourly voting intervals:
+The derivation of blinded credentials, spatial positioning and temporal rotation descriptors accross the global HRT shifts are governed by two synchronized parameters daily updated within the network consensus, the global SRV and the time period, or temporal epoch \cite{tor_rendspec}.
+The consensus cluster of directory authorities produce a newly generated SRV every consecutive interval (epoch) defined by the consensus parameter \texttt{hsdir-interval}, which defaults to an operational duration of 1440 minutes (24 hours), at 00:00 UTC over hourly voting intervals \cite{tor_srvspec}:
 
 \begin{enumerate}
     \item \textbf{Commit Phase (00:00 - 12:00 UTC):} Authorities include cryptographic commitments of privetly generated random numbers within their hourly consensus votes.
     \item \textbf{Reveal Phase (12:00 - 00:00 UTC):} Authorities expose their random values, validating them against the previous phase's commitments. At 00:00 UTC, the final unified SRV is compiled and appended to the live consensus.
 \end{enumerate}
 
-This shared secret acts a global seed that inforces pseudo-random reshuffling of the entire hash ring, preventing pre-calculation and maintance of malicious nodes adjacent to a target's publication space.
+This shared secret acts a global seed that inforces pseudo-random reshuffling of the entire hash ring, preventing pre-calculation and maintance of malicious nodes adjacent to a target's publication space \cite{tor_srvspec}.
 
-To publish its onion descriptor, the hidden service applies a key-blinding function mixed with the two current synchronized temporal variables to produce the temporal blinded public key $\textit{K}_{\text{b}}$. For each independent publication replica the service derives a distinct 256-bit
+To publish its onion descriptor, the hidden service applies a key-blinding function mixed with the two current synchronized temporal variables to produce the temporal blinded public key $\textit{K}_{\text{b}}$ \cite{tor_rendspec}. For each independent publication replica the service derives a distinct 256-bit
 coordinate refer as the service index, where the number of replicas ($\textit{N}_{\text{r}}$) defaults to 2 replicas. The derivation of the service index for a given replica identifier ($\textit{r}$) is as follows:
 \begin{equation}
 \mathcal{HS}_{\text{index}} = \text{SHA3-256}\big(\textit{"store-at-idx"} \parallel \textit{K}_{\text{b}} \parallel \textit{r} \parallel \textit{L}_{\text{p}} \parallel \textit{N}_{\text{p}}\big)
 \end{equation}
 where $\textit{K}_{\text{blinded}}$ represents the blinded public key, $\textit{L}_{\text{p}}$ is the standardized length of the temporal epoch, and $\textit{N}_{\text{p}}$ is the sequential index of the current time period. 
 
-Concurrently, every active relay in the consensus that satisfies specific uptime, stability, and flag requirements (\texttt{HSDir, Stable, Fast}) to operate as HSDir computes its own relative position on the ring, recalculated for each temporal epoch using the global SRV:
+Concurrently, every active relay in the consensus that satisfies specific uptime, stability, and flag requirements (\texttt{HSDir, Stable, Fast}) to operate as HSDir computes its own relative position on the ring, recalculated for each temporal epoch using the global SRV \cite{tor_rendspec, tor_dirspec}:
 \begin{equation}
 \mathcal{R}_{\text{index}} = \text{SHA3-256}\big(\textit{"node-idx"} \parallel \textit{ID} \parallel \text{SRV} \parallel \textit{N}_{\text{p}} \parallel \textit{L}_{\text{p}}\big)
 \end{equation}
 where $\textit{ID}$ denotes the cryptographic fingerprint of the relay.
 %TODO: Illustration
 Once both indeces are mapped onto the 256-bit circular index table of the HRT, the onion identifies the specific relays in charge of reduntdantly storing the current onion descriptor. The service selects the first distinct HSDir nodes ($\textit{k}$) whose positions on the HRT 
-($\mathcal{R}_{\text{index}}$) immediately succeed the hidden service positions ($\mathcal{HS}_{\text{index}}$), where the pool number of nodes ($\textit{k}$) is given by the consensus parameter \texttt{hsdir-spread-store} explicitly set to 4. Thus, the service initiates a sequence
+($\mathcal{R}_{\text{index}}$) immediately succeed the hidden service positions ($\mathcal{HS}_{\text{index}}$), where the pool number of nodes ($\textit{k}$) is given by the consensus parameter \texttt{hsdir-spread-store} explicitly set to 4 \cite{tor_rendspec}. Thus, the service initiates a sequence
 of encrypted descriptor uploads to these first 4 unique HSDir nodes indentified for each service index computed, resulting in the descriptor upload to total of 8 distinct HSDir nodes to host and serve the record during the designated time period.
 
 Because these positions shift daily along the global SRV, this parameter along $\textit{N}_{\text{p}}$, $\textit{L}_{\text{p}}$ are publicly observable through the public network consensus files which serve to track a targeted \texttt{.onion} address with an independent system
-to extract the onion's master key, compute $\textit{K}_{\text{b}}$, and determine the exact 8 HSDir relays responsible of hosting the onion's descriptor any given day. This mapping provides the basis to track HSDir node uptime distributions, assess runtime stability or operator entity 
-cluster profiling via IP range correlation.
+to extract the onion's master key, compute $\textit{K}_{\text{b}}$, and determine the exact 8 HSDir relays responsible of hosting the onion's descriptor any given day. This mapping provides the basis to track HSDir node uptime distributions, assess runtime stability or operator entity
+cluster profiling via IP range correlation \cite{winter2016sybil}.
 
-\subsection{Service Access} %TODO: Add references from Tor's official sources and infographics
+\subsection{Service Access}
 
 Unlike the classical Internet, where a client establishes a direct transport layer socket to an IP address, the Tor version 3 (V3) requires both the client and server to construct separate three-hop virtual circuits which congregation to a mutually agreed intermediate node is referred as
-rendezvous mechanism. This architecture ensures neither end can deduce the routing trajectory, geo-origin and underlying network topology of the opposite party. 
+rendezvous mechanism \cite{tor_rendspec, tor_onion_overview}. This architecture ensures neither end can deduce the routing trajectory, geo-origin and underlying network topology of the opposite party. 
 
 The service access process begins with the client parsing the 56-character \texttt{.onion} address to locate the master public identity key and resolves the inherent Ed25519 public key, which combined with the temporal epoch and SRV retrieved from the network status consensus, the client
 cryptographically computes the target service $\textit{K}_{\text{b}}$ and derive the settled service indices mapped onto the HRT. The client then selects one of the four active HSDir relays appointed to the replica, constructs an anonymous three-hop circuit toward it, and transmits an authenticated
-HTTP GET request to download the signed onion descriptor records.
+HTTP GET request to download the signed onion descriptor records \cite{tor_rendspec}.
 
 Upon receiving the payload, the client parses the descriptor utilizing the blinded key structures to verify the descriptor's cryptographic signature and decrypt its inner layer. This extracts the array of active IPOs routing vectors along with their respective public keys and link specifiers, and the 
-service's temporal encryption keys. The connection sequence then diverges into two parallel paths:
+service's temporal encryption keys. The connection sequence then diverges into two parallel paths \cite{tor_rendspec}:
 
 \begin{enumerate}
     \item \textbf{Rendezvous Establishment:} The client selects an external relay from the consensus to act as an isolated cryptographic bridge referred as RPO. A three-hop circuit is constructed toward this node and delivered with an \texttt{ESTABLISH\_RENDEZVOUS} cell, which provisions the relay with a secret and an unique single-use 20-byte rendezvous cookie. Upon acknowledging the setup, the RPO registers the cookie in its active volatile session cache and awaits an inbound circuit connection that presents the corresponding token.
@@ -366,12 +366,49 @@ service's temporal encryption keys. The connection sequence then diverges into t
 
 Upon receiving this cell, the IPO forwards the encrypted inner payload to the onion service via an \texttt{INTRODUCE2} cell. The hidden service then decrypts this instruction block using its blinded private key, validates its integrity, draws out the RPO's routoing parameters alongside the 20-byte rendezvous cookie
 and establishes a separate three-hop circuit to the specified RPO relay by submitting a \texttt{RENDEZVOUS1} cell embedded with the matching rendezvous cookie. The RPO finally splices the incoming circuit into a unified six-hoop transparent pipeline facilitating end-to-end forward-secure data streams protected with 
-symmetric encryption keys safeguarding against node sniffing or network-wide traffic correlation attack.
+symmetric encryption keys safeguarding against node sniffing or network-wide traffic correlation attack \cite{tor_rendspec}.
+
+\section{Related Work}
+
+Prior research on the Tor version 3 (V3) hidden service directory divides into measurement studies characterise how directory relays and onion descriptors behave in the live network, whereas attack studies exploit the directory to disrupt or deanonymise the services that relies on it. This section groups the closest prior 
+works by their relationship to the measurement framework. It separates the studies that provide direct methodological basis from those that explain why particular measurements were designed the way they are.
+
+The closest methodological predecessor is the \texttt{sybilhunter} system of Winter et al.~\cite{winter2016sybil}, which mined roughly nine years of archived consensuses and router descriptors to expose coordinated relay groups that are operated by a single entity. Three of its techniques map onto analyses reproduced 
+here. Its churn technique quantifies the joining and leaving of relays between consecutive consensuses using an adapted Godfrey formula split into separate join and leave series~\cite{winter2016sybil}, the same concept computed underlying the per-flag churn distributions. Its uptime technique renders relay availability 
+as binary online/offline sequences and sorts them with single-linkage clustering under a Pearson-correlation distance so that synchronised reboot relays become visually adjacent~\cite{winter2016sybil}, which is the clustered uptime matrix that the present work recomputes for the tracked HSDir population. 
+Its fingerprint technique tracks relays that repeatedly change their identity fingerprint from a fixed address, an indicative of attempts to occupy chosen positions in the descriptor hash ring~\cite{winter2016sybil}, and this directly parallels the fingerprint-change tracking applied here to the same end. 
+That study also records the flag thresholds, the \texttt{HSDir} flag requires more than ninety-six hours of uptime and that a large share of running relays act as directories~\cite{winter2016sybil}. Its evidence precedes the period in which V3 became common, so its data is not V3-specific, but the analytical methodology 
+transfers unchanged to the V3 directory studied here.
+ 
+The most empirical basis comes from H\"oller et al.~\cite{hoeller2021statev3}, who operated a family of fifty relays admitted to the hidden service directory in order to observe V3 blinded-key uploads and downloads from a controlled postion. The work extrapolates the number of active V3 services from 
+the fraction of the directory it observes, and it reports a prominent asymmetry between publication and retrieval: a large majority of uploaded blinded public keys were never fetched from the authors' relays, and a majority of received download requests could not be answered because the corresponding descriptor 
+had never been uploaded~\cite{hoeller2021statev3}. The upload-versus-fetch persistence histograms in that study are the model on which the descriptor upload and fetch persistence analysis of this thesis is based. Equally relevant is its privacy-preserving measurement design, in which timestamps are truncated and 
+stored blinded keys are reordered before analysis to prevent the data from enabling correlation against individual users~\cite{hoeller2021statev3}. The same constraints guide the non-intrusive collection strategy here.
+ 
+A second group of prior art does not provide methodology but motivates the specific stability measurements this thesis performs. H\"oller and Mayrhofer~\cite{hoeller2024ddos} document a distributed denial-of-service (DoS) incident against two relays belonging to the same fifty-relay directory project, in which memory 
+exhaustion forced the targeted relays to reboot. Because the \texttt{HSDir} flag depends on sustained uptime, both relays lost that flag as a direct consequence of the reboot, and the disruption was not visible through the metrics that the relays report about themselves~\cite{hoeller2024ddos}. This is precisely the 
+context that the stripped-flag churn analysis of this thesis is designed to characterise, and the broader account of relays disappearing and returning mid-experiment, with uptime reset in the process, also supports the general churn and uptime-matrix analyses. From an unrelated research group, Zhang et al.~\cite{zhang2024hsdirsniper} 
+describe \texttt{HSDirSniper}, an attack that floods a responsible directory's descriptor cache within a single hour so that its aging mechanism purges every stored descriptor, portraiting an arbitrary hidden service unreachable while the service itself observes nothing unusual~\cite{zhang2024hsdirsniper}. That study matters 
+as a complementary threat model. It establishes a concrete mechanism by which a directory relay listed as healthy may hold no valid descriptor for a service, which is one reason the silent-failure and upload-versus-fetch observations gathered by this thesis are 
+treated as security-relevant signals and not merely descriptive statistics.
+
+A more distant art, but relevant to the design of the probe population, is the provisioning-time study of H\"oller et al.~\cite{hoeller2021shortlived}. It measures the latency of deploying an onion service and finds that the transition to V3 reduced deployment to a few seconds, with an overwhelming share of 
+that time spent uploading the descriptor to the directory~\cite{hoeller2021shortlived}. Among the configurations it measures is the ephemeral onion service, created through the control protocol and existing only while the controlling connection remains open~\cite{hoeller2021shortlived}. This study motivates why 
+cycled ephemeral onions are worth including in the study population of this thesis. It establishes that short-lived, dynamically generated services are a realistic use of the V3 directory, so probing the hash ring with daily-rotated ephemeral endpoints samples a genuine class of service rather than an artificial 
+one. Nonetheless, it is not the source of any measurement method employed here.
+
+Finally, the operator-diversity analysis of Sendner et al.~\cite{sendner2025sybil} forms a distinct research thread. Working from consensus and descriptor data, that study groups relays by declared family and related attributes, and shows that a small number of operators concentrate a large share of network capacity,
+to the point that strategically deployed sybil families can occupy both circuit endpoints for a quantifiable share of traffic~\cite{sendner2025sybil}. Its family-based grouping corresponds to the declared-family and family-identifier clustering used in this thesis to detect coordinated directory operators. It also 
+provides an important caution: evaluating \texttt{sybilhunter}~\cite{winter2016sybil}, the same detector whose techniques this thesis adapts, that study reports that a prepared adversary can evade detection by diversifying nicknames, contact information, addresses, uptimes, and ports~\cite{sendner2025sybil}. Family-based 
+and configuration-based sybil detection is therefore treated here as an indicator of coordination rather than as a complete defence.
+ 
+In summary, this prior art measures the V3 directory from a fixed relay postion, attacks it, or analyses relay-family concentration across the network as a whole. The present work instead tracks the directory from the perspective of monitored services and relays simultaneously, correlating node-level uptime and 
+stability, churn and flag churn, hash-ring position, and family-based sybil indicators over a continuous measurement window. % TODO: this novelty/gap sentence is an absence-of-work claim -- verify against the wider V3 literature before asserting it; none of the six cited works individually supports "no prior study combines these", so it is stated as this thesis's positioning, not attributed to a source.
 
 \section{Methodology}
 
 To investigate and analyze the architectural security, runtime, stability, behaviour and Sybil deployments within Tor version 3 (V3) HSDirs, a non-intrusive and reliable tracking framework is designed. Rather than relying in on historical third-party directory archives which lack granularity, an automated and concurrent 
-program was developed and executed during one-month time-period. The measurement infrastructure interacts directly with a local Tor instance via its asynchronous control port pipeline. The core approach of this methodology is the real-time interception of routing descriptors and propagation, track individual relay flag 
+program was developed and executed during one-month time-period. The measurement infrastructure interacts directly with a local Tor instance via its asynchronous control port pipeline \cite{tor_controlspec}. The core approach of this methodology is the real-time interception of routing descriptors and propagation, track individual relay flag 
 churn, state fluctuations, availability on the HRT and isolate structural network identifiers from the live network.
 
 \subsection{Concurrent System Architecture and State Synchronization}
@@ -388,22 +425,22 @@ categories, the system ensures comprehensive coverage across distinct regions of
 A five-thread colletion pipeline splits with each thread targeting a specific operational routine:
 
 \begin{enumerate}
-    \item \textbf{Statful Consensus Auditing and Sybil Vector Extraction:} These threads are driven by two independent consensus tracking routines, network-wide consensus monitor and tracked HSDirs status monitor. Triggered hourly at XX:05 UTC, these modules ingest the global and tracked directory network consensus information to map the state of active global and tracked relays. The audit engine reads the microdescriptor headers of every operational relay flagged with \texttt{HSDir, Stable} and \texttt{Fast} properties, mapping their IP addresses, nickname, open Onion Routing (OR) ports, and cryptographic fingerprints. Implemented with a microdescriptor parser bypass, sybil identity markers and flag clustered relays operated by coordinated entities are extracted with the capture of raw declared family lists and cryptographic \texttt{famil\_ids} vectors. Tracked active node that disappear from the consensus directory accumulates hourly absenses considering an offline churn; a consecutive absense count of $\geq$ 2 sets off an state reassignment to a dead-offline churn, capturing long-lived relay drop rates.
-    \item \textbf{Active Outbound Prober:} A dedicated prober operating on a fixed periodic 20-minute loop. The mechanism randomizes the target request queue and dispatches raw asynchronous \texttt{HSFETCH} instruction lookups directly to the control port socket. These queries bypass Tor's internal circuit-level memory dependencies within the local Tor client, forcing the daemon to query teh remote directory nodes directly. This method discloses silent failues where a node listed as online cannot serve requested descriptors. To achieve complete coverage a two-tier lookup is triggered, a standard dynamic hash ring resolution, and a direct poll targeted at individual fingerprints historically recorded in memory as active hosting relays. These lookup patterns compels the local Tor daemon to query the remote relays directly, causing an asynchronous event listener to log the resulting network events.
-	\item \textbf{Asynchronous Event Listener:} Thread instantiated to establish a persistent, isolated, direct subscription to the controller's internal \texttt{HS\_DESC} stream event pipeline, which tracks real-time descriptor uploads, fetch requests, and operational failures.
-    \item \textbf{Scaled Ephemeral Manager:} To scale the observation scope and neutralize spatial placement bias inherent to a set of static domains, this runtime allocation script automatically invokes Tor control commands to dynamically deploy fifty detached , ephemeral hidden service endpoints and cycled at regular daily intervals. These generated cryptographic addresses are automatically appended to the active tracking set memory, and spreaded across the HRT ensuring broader statistical sampling across the decentralized DHT ring space.
+    \item \textbf{Statful Consensus Auditing and Sybil Vector Extraction:} These threads are driven by two independent consensus tracking routines, network-wide consensus monitor and tracked HSDirs status monitor. Triggered hourly at XX:05 UTC, these modules ingest the global and tracked directory network consensus information to map the state of active global and tracked relays. The audit engine reads the microdescriptor headers of every operational relay flagged with \texttt{HSDir, Stable} and \texttt{Fast} properties \cite{tor_dirspec}, mapping their IP addresses, nickname, open Onion Routing (OR) ports, and cryptographic fingerprints. Implemented with a microdescriptor parser bypass, sybil identity markers and flag clustered relays operated by coordinated entities are extracted with the capture of raw declared family lists and cryptographic \texttt{famil\_ids} vectors. Tracked active node that disappear from the consensus directory accumulates hourly absenses considering an offline churn; a consecutive absense count of $\geq$ 2 sets off an state reassignment to a dead-offline churn, capturing long-lived relay drop rates.
+    \item \textbf{Active Outbound Prober:} A dedicated prober operating on a fixed periodic 20-minute loop. The mechanism randomizes the target request queue and dispatches raw asynchronous \texttt{HSFETCH} instruction lookups directly to the control port socket \cite{tor_controlspec}. These queries bypass Tor's internal circuit-level memory dependencies within the local Tor client, forcing the daemon to query teh remote directory nodes directly. This method discloses silent failues where a node listed as online cannot serve requested descriptors. To achieve complete coverage a two-tier lookup is triggered, a standard dynamic hash ring resolution, and a direct poll targeted at individual fingerprints historically recorded in memory as active hosting relays. These lookup patterns compels the local Tor daemon to query the remote relays directly, causing an asynchronous event listener to log the resulting network events.
+	\item \textbf{Asynchronous Event Listener:} Thread instantiated to establish a persistent, isolated, direct subscription to the controller's internal \texttt{HS\_DESC} stream event pipeline, which tracks real-time descriptor uploads, fetch requests, and operational failures \cite{tor_controlspec}.
+    \item \textbf{Scaled Ephemeral Manager:} To scale the observation scope and neutralize spatial placement bias inherent to a set of static domains, this runtime allocation script automatically invokes Tor control commands to dynamically deploy fifty detached , ephemeral hidden service endpoints and cycled at regular daily intervals \cite{tor_controlspec}. These generated cryptographic addresses are automatically appended to the active tracking set memory, and spreaded across the HRT ensuring broader statistical sampling across the decentralized DHT ring space.
 \end{enumerate}
 
 \subsection{Hash Ring Mapping and Low-Level Protocol Parsing}
 
-A significant engineering barrier rised upon the degradation of the primary Python control library \texttt{Stem} for several years since June 2023, which lacks support of native parsing tailored to the modern version 3 onion service architecture. To bypass this limitation without sacrificing data granularity, 
+A significant engineering barrier rised upon the degradation of the primary Python control library \texttt{Stem} for several years since June 2023 \cite{stem_github}, which lacks support of native parsing tailored to the modern version 3 onion service architecture. To bypass this limitation without sacrificing data granularity, 
 custom protocol-level bypasses were introduced. Instead of using the broken library abstractions, the script builds isolated channels to prevent control port command congestion and interact directly with the raw socket stream. 
 
-While the targeted consensus auditing can directly query (\texttt{.get\_microdescriptor()}) and partially parse relay consensus streams, the global consensus audit downloads unparsed consensus streams via raw \texttt{get\_info("dir/status-vote/current/consensus-micr} \texttt{odesc")}. It then extracts critical 
-metrics and processes the text files using custom-built parsing that manually extracts the global SRV, decodes base64-encoded relay components, and handles raw-byte structures to compute the 32-byte HRT coordinate positions. 
+While the targeted consensus auditing can directly query (\texttt{.get\_microdescriptor()}) and partially parse relay consensus streams, the global consensus audit downloads unparsed consensus streams via raw \texttt{get\_info("dir/status-vote/current/consensus-micr} \texttt{odesc")} \cite{tor_controlspec}. It then extracts critical
+metrics and processes the text files using custom-built parsing that manually extracts the global SRV, decodes base64-encoded relay components, and handles raw-byte structures to compute the 32-byte HRT coordinate positions \cite{tor_dirspec}.
 
 These bypasses allows the framework to replicate the 32-byte DHT ring topology, which by capturing the global SRV and individual relay identity keys ($\textit{K}_{\text{ID}}$) from the consensus
-, and parsing the current time period ($\textit{T}_{\text{p}}$), calculates the precise position index of every directory node using native SHA3-256 hashing routine:
+, and parsing the current time period ($\textit{T}_{\text{p}}$), calculates the precise position index of every directory node using native SHA3-256 hashing routine \cite{tor_rendspec}:
 \begin{equation}
 \mathcal{R}_{\text{index}} = \text{SHA3-256}\big(\textit{K}_{\text{ID}} \parallel \textit{T}_{\text{p}} \parallel \textit{SRV} \big)
 \end{equation}
@@ -417,7 +454,7 @@ This distance is subsequently converted into a normalized position percentage re
 
 \subsection{Temporal Synchronization and Boundary Isolation}
 
-A foundational requisite of the measurement system is the management of daily SRV transaction and the subsequent reshuffling of the hash ring coordinates and active blinded keys, which Tor V3 protocol enforces the rotation exactly at 00:00 UTC. 
+A foundational requisite of the measurement system is the management of daily SRV transaction and the subsequent reshuffling of the hash ring coordinates and active blinded keys, which Tor V3 protocol enforces the rotation exactly at 00:00 UTC \cite{tor_srvspec, tor_rendspec}.
 
 To prevent data contamination from overlapping consensus epochs, the framework
 enforces a strict exclusion boundary window spanning from 23:55 UTC to 00:07 UTC. During this interval, live network probes and live event captures are suspended or systematically filtered.
@@ -431,37 +468,138 @@ re-initialized to a blank vector slate. Active outbound network probes resume at
 This synchronized time structure ensures that all local tracking states, rotated blinded keys, and newly designated remote directory authorities have fully stabilized across the network 
 before data collection resumes, preserving high-fidelity of long-term churn measurements.
 
-\subsection{Structural Sybil Footprint Indentification}
+\subsection{Structural Sybil Footprint Identification}
 
 An analytical objective is differentiate random, isolated relay failures from systematic disruptions managed by large-scale coordinated node operators. When a monitored HSDir drops from the network
 or fails to serve valid descriptor, the framework collects structural identity markers to detect potential Sybil concentrations based on selected criteria:
 
 \begin{itemize}
-    \item \textbf{Network Prefix Aggregation:} The framework maps IPv4 and IPv6 addresses of every directory node into standard \texttt{/16} and \texttt{/24} subnets. This grouping isolates cases where a single operator deploys multiple discrete directory nodes into the consensus within identical data center allocations or IP routing subnets to artificially influence a section of the HRT.
-    \item \textbf{Declared and Effective Administrative Families:} The microdescriptor records are parsed hourly to extract both declared relay family identifiers and mutual recognized effective family lists. This tracks evaluate compliance with Tor's administrative policies and flags undeclared Sybil networks that exhibit identical uptime profiles or infrastructure features while omitting formal administrative declarations.
+    \item \textbf{Network Prefix Aggregation:} The framework maps IPv4 addresses of every directory node  and into standard \texttt{/24} subnets. This grouping isolates cases where a single operator deploys multiple discrete directory nodes into the consensus within identical data center allocations or IP routing subnets to artificially influence a section of the HRT.
+    \item \textbf{Declared and Effective Administrative Families:} The microdescriptor records are parsed hourly to extract both declared relay family identifiers and mutual recognized effective family lists \cite{tor_dirspec}. This tracks evaluate compliance with Tor's administrative policies and flags undeclared Sybil networks that exhibit identical uptime profiles or infrastructure features while omitting formal administrative declarations.
 \end{itemize}
 
+\section{Evaluation}
+ 
+This section presents the observational results of the one-month measurement campaign and is organised as a single sequence from the measurement basis to increasingly specific findings. It commences
+by establishing what was observed and how the observations are scoped and filtered, so that every later result can be read against a common baseline. It then characterises the reliability of 
+individual directory relays through their uptime and stability, followed by their churn and flag dynamics, which together describe how single nodes behave over time. Only afterwards does the analysis 
+group relays into operators and quantify sybil concentration, since deciding whether a failure affects one node or a whole operator requires the per-node picture to be in place first. The final 
+subsections survey the position of directories on the hash ring and, at best granularity, to the upload and fetch behaviour of individual descriptors. The ordering is deliberate, each 
+subsection introduces the concepts that the next relies on, and the unit of analysis widens step by step from the relay snapshot, to the operator, to the ring geometry, and finally to the descriptor.
+ 
+\subsection{Measurement Basis and Scope}
+ 
+The analysis draws on five recorded data streams, each capturing a distinct view of the directory over the observation window. The \textit{network-wide} consensus stream records hourly snapshots of 
+every directory relay listed in the consensus, providing the population-level baseline. The \textit{tracked} consensus stream records the same hourly snapshots but restricted to the directories 
+responsible for the study's own set of probed onion services, so that directory behaviour can be observed from the perspective of specific services. Two further streams, the \textit{network-wide rotation-check} stream 
+and the \textit{tracked rotation-check} stream, hold the daily-rotated snapshots used to assure stability against the deliberately cycled node set, mirroring the two populations above. 
+Finally, the \textit{ring-event} probe log records descriptor-level upload and fetch events observed for the tracked onions, and is the only stream that operates at the granularity of individual 
+blinded public keys rather than relays.
+ 
+Two reporting conventions apply throughout the section. First, almost every analysis is computed for two \textit{contexts}: the network-wide population drawn from the network-wide consensus stream, and 
+the tracked population drawn from the tracked consensus stream. Second, within the tracked context the results are also broken down by \textit{service type}, of which there are three: static controlled 
+services (\texttt{STATIC\_CONTROL}) as SC constituting 50 services, ephemeral services (\texttt{EPHEMERAL\_VARIABLE}) as EV constituting 50 daily-rotated services, and third-party probed 
+services (\texttt{THIRD\_PARTY\_PROBE}) as TP constituting 13 services. Unless said otherwise, results are reported for both contexts, with the tracked context further split by service type.
+ 
+The observation window spans one month of continuous hourly collection. To keep the temporal axis independent of the calendar dates, each distinct calendar date is normalised to a 
+sequential label of the form ``Day~$N$'', ordered chronologically, and all per-day results are called on these labels.
+ 
+A single filtering convention dictates which observations count as a genuine presence of a relay in a given snapshot, as opposed to a transient gap in collection. Each observation carries a count 
+of consecutive hourly absences, and the standard filter retains observations with at most one such absence, denoting a single missed snapshot as a true disappearance measurement rather than the 
+consecutive serving as confirmation. A stricter variant of the filter admits only observations with zero consecutive absences, used by the analyses whose correctness depends on an uninterrupted presence signal, 
+namely the churn analysis, the per-relay identity-change analyses, and the undeclared-family graph analysis.
+
+One measurement limitation is established before any per-service-type result is reported, because it governs how those results must be read. In the tracked data a single row represents the group of a relays 
+within the probed onion services, not one row per physical relay, so a relay that acts as directory for onions of more than one service type is counted once within each service-type subset it graps while 
+contributing only once to the overall total. The per-service-type unique-relay counts therefore overlap and are not additive. A dedicated diagnostic quantifies this overlap directly, by collecting for 
+each relay the set of distinct service types it was ever observed under and counting the exact combinations. The diagnostic is meaningful only where a service-type label exists, therefore it is to not run 
+on the network-wide population, which carries no such label, but it is run on both the tracked consensus stream and the tracked rotation-check stream, since the per-service-type breakdowns of both 
+populations require the same limitation to be read correctly.
+ 
+For the tracked consensus stream, the diagnostic identifies 7{,}446 distinct relays carrying a usable service-type label, of which 6{,}545 (87.90\%) were observed 
+under two or more service types over the study period. The exact combination breakdown is given in Table~\ref{tab:overlap_tracked}. For the tracked rotation-check stream, the same diagnostic 
+identifies 6{,}943 distinct relays, of which 5{,}523 (79.55\%) touched two or more service types, which breakdown is given in Table~\ref{tab:overlap_rotated}. In both populations the large majority 
+of relays serve onions across several service types, which is why the per-service-type counts reported by later subsections must be read as overlapping subsets rather than as a partition of the tracked population.
+ 
 \begin{table}[htbp]
-\caption{Table Type Styles}
+\caption{Service-type overlap tracked stream}
 \begin{center}
-\begin{tabular}{|c|c|c|c|}
+\begin{tabular}{|l|r|}
 \hline
-\textbf{Table}&\multicolumn{3}{|c|}{\textbf{Table Column Head}} \\
-\cline{2-4} 
-\textbf{Head} & \textbf{\textit{Table column subhead}}& \textbf{\textit{Subhead}}& \textbf{\textit{Subhead}} \\
+\textbf{Service-type combination} & \textbf{Relays} \\
 \hline
-copy& More table copy$^{\mathrm{a}}$& &  \\
+EV + SC + TP & 2{,}066 \\
 \hline
-\multicolumn{4}{l}{$^{\mathrm{a}}$Sample of a Table footnote.}
+EV + SC & 4{,}382 \\
+\hline
+EV + TP & 65 \\
+\hline
+SC + TP & 32 \\
+\hline
+EV & 536 \\
+\hline
+SC & 349 \\
+\hline
+TP & 16 \\
+\hline
+{\textbf{Total distinct relays}} & \textbf{7{,}446} \\
+\hline
 \end{tabular}
-\label{tab1}
+\label{tab:overlap_tracked}
+\end{center}
+\end{table}
+ 
+\begin{table}[htbp]
+\caption{Service-type overlap rotation-check stream}
+\begin{center}
+\begin{tabular}{|l|r|}
+\hline
+\textbf{Service-type combination} & \textbf{Relays} \\
+\hline
+EV + SC + TP & 1{,}130 \\
+\hline
+EV + SC & 4{,}209 \\
+\hline
+EV + TP & 134 \\
+\hline
+SC + TP & 50 \\
+\hline
+EV & 822 \\
+\hline
+SC & 573 \\
+\hline
+TP & 25 \\
+\hline
+{\textbf{Total distinct relays}} & \textbf{6{,}943} \\
+\hline
+\end{tabular}
+\label{tab:overlap_rotated}
 \end{center}
 \end{table}
 
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=0.7\textwidth]{images/logo_UC3M.png}}
-\caption{Example of a figure caption.}\label{fig}
-\end{figure}
+%Examples of tables and figures
+
+% \begin{table}[htbp]
+% \caption{Table Type Styles}
+% \begin{center}
+% \begin{tabular}{|c|c|c|c|}
+% \hline
+% \textbf{Table}&\multicolumn{3}{|c|}{\textbf{Table Column Head}} \\
+% \cline{2-4} 
+% \textbf{Head} & \textbf{\textit{Table column subhead}}& \textbf{\textit{Subhead}}& \textbf{\textit{Subhead}} \\
+% \hline
+% copy& More table copy$^{\mathrm{a}}$& &  \\
+% \hline
+% \multicolumn{4}{l}{$^{\mathrm{a}}$Sample of a Table footnote.}
+% \end{tabular}
+% \label{tab1}
+% \end{center}
+% \end{table}
+
+% \begin{figure}[htbp]
+% \centerline{\includegraphics[width=0.7\textwidth]{images/logo_UC3M.png}}
+% \caption{Example of a figure caption.}\label{fig}
+% \end{figure}
 
 \section*{Acknowledgment}
 

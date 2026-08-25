@@ -1,30 +1,153 @@
-@book{lamp94,
-  author = {Leslie Lamport},
-  year = {1994},
-  title = {{\LaTeX}: a Document Preparation System},
-  publisher = {Addison Wesley},
-  address = {Massachusetts},
-  edition = {2}
+
+@online{tor_rendspec,
+  author  = {{The Tor Project}},
+  title   = {Tor Rendezvous Specification - Version 3},
+  url     = {https://spec.torproject.org/rend-spec/},
+  urldate = {2026-07-21}
 }
 
-@article{knut84,
-  title={Literate Programming},
-  author={Donald E. Knuth},
-  journal={The Computer Journal},
-  volume={27},
-  number={2},
-  pages={97--111},
-  year={1984},
-  publisher={Oxford University Press}
+@online{tor_dirspec,
+  author  = {{The Tor Project}},
+  title   = {Tor Directory Protocol, Version 3},
+  url     = {https://spec.torproject.org/dir-spec/},
+  urldate = {2026-07-21}
 }
 
-@inproceedings{lesk77,
-  title={Computer Typesetting of Technical Journals on {UNIX}},
-  author={Michael Lesk and Brian Kernighan},
-  booktitle={Proceedings of American Federation of
-             Information Processing Societies: 1977
-             National Computer Conference},
-  pages={879--888},
-  year={1977},
-  address={Dallas, Texas}
+@online{tor_srvspec,
+  author  = {{The Tor Project}},
+  title   = {Tor Shared Random Subsystem Specification},
+  url     = {https://spec.torproject.org/srv-spec/},
+  urldate = {2026-07-21}
+}
+
+@online{tor_controlspec,
+  author  = {{The Tor Project}},
+  title   = {{TC}: A Tor Control Protocol (Version 1)},
+  url     = {https://spec.torproject.org/control-spec/},
+  urldate = {2026-07-21}
+}
+
+@online{tor_onion_overview,
+  author  = {{The Tor Project}},
+  title   = {How do Onion Services Work?},
+  url     = {https://community.torproject.org/onion-services/overview/},
+  urldate = {2026-07-21}
+}
+
+@online{tor_v2_deprecation,
+  author  = {David Goulet},
+  title   = {Onion Service Version 2 Deprecation Timeline},
+  year    = {2020},
+  month   = jul,
+  organization = {The Tor Project},
+  url     = {https://blog.torproject.org/v2-deprecation-timeline/},
+  urldate = {2026-07-21}
+}
+
+@online{stem_github,
+  author  = {{The Tor Project}},
+  title   = {Stem: Python Controller Library for Tor},
+  url     = {https://github.com/torproject/stem},
+  urldate = {2026-07-21},
+  note    = {GitHub repository; latest release v1.8.2, June 2023}
+}
+
+@inproceedings{dingledine2004tor,
+  author    = {Roger Dingledine and Nick Mathewson and Paul F. Syverson},
+  title     = {Tor: The Second-Generation Onion Router},
+  url       = {https://www.usenix.org/conference/13th-usenix-security-symposium/tor-second-generation-onion-router},
+  booktitle = {Proceedings of the 13th {USENIX} Security Symposium},
+  year      = {2004},
+  month     = aug,
+  address   = {San Diego, CA, USA},
+  pages     = {303--320},
+  publisher = {USENIX Association}
+}
+
+@inproceedings{biryukov2013trawling,
+  author    = {Alex Biryukov and Ivan Pustogarov and Ralf-Philipp Weinmann},
+  title     = {Trawling for Tor Hidden Services: Detection, Measurement, Deanonymization},
+  booktitle = {Proceedings of the 2013 {IEEE} Symposium on Security and Privacy},
+  year      = {2013},
+  month     = may,
+  address   = {San Francisco, CA, USA},
+  pages     = {80--94},
+  publisher = {IEEE},
+  doi       = {10.1109/SP.2013.15}
+}
+
+@inproceedings{winter2016sybil,
+  author    = {Philipp Winter and Roya Ensafi and Karsten Loesing and Nick Feamster},
+  title     = {Identifying and Characterizing Sybils in the Tor Network},
+  booktitle = {Proceedings of the 25th {USENIX} Security Symposium},
+  year      = {2016},
+  month     = aug,
+  address   = {Austin, TX, USA},
+  pages     = {1169--1185},
+  publisher = {USENIX Association},
+  url       = {https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/winter}
+}
+
+@inproceedings{hoeller2021statev3,
+  author    = {Tobias H{\"o}ller and Michael Roland and Ren{\'e} Mayrhofer},
+  title     = {On the State of {V3} Onion Services},
+  booktitle = {Proceedings of the {ACM} {SIGCOMM} 2021 Workshop on Free and Open Communications on the Internet ({FOCI} '21)},
+  year      = {2021},
+  month     = aug,
+  pages     = {50--56},
+  publisher = {ACM},
+  doi       = {10.1145/3473604.3474565},
+  url       = {https://doi.org/10.1145/3473604.3474565},
+  urldate   = {2026-08-10}
+}
+
+@inproceedings{hoeller2021shortlived,
+  author    = {Tobias H{\"o}ller and Thomas Raab and Michael Roland and Ren{\'e} Mayrhofer},
+  title     = {On the Feasibility of Short-Lived Dynamic Onion Services},
+  booktitle = {2021 {IEEE} Security and Privacy Workshops ({SPW})},
+  year      = {2021},
+  month     = may,
+  address   = {San Francisco, CA, USA},
+  pages     = {25--30},
+  publisher = {IEEE},
+  doi       = {10.1109/SPW53761.2021.00012},
+  url       = {https://doi.org/10.1109/SPW53761.2021.00012},
+  urldate   = {2026-08-10}
+}
+
+@inproceedings{hoeller2024ddos,
+  author    = {Tobias H{\"o}ller and Ren{\'e} Mayrhofer},
+  title     = {A Case Study on {DDoS} Attacks Against {Tor} Relays},
+  booktitle = {Free and Open Communications on the Internet ({FOCI})},
+  year      = {2024},
+  number    = {2},
+  pages     = {64--67},
+  url       = {https://www.petsymposium.org/foci/2024/foci-2024-0014.php},
+  urldate   = {2026-08-10}
+}
+
+@inproceedings{zhang2024hsdirsniper,
+  author    = {Qingfeng Zhang and Zhiyang Teng and Xuebin Wang and Yue Gao and Qingyun Liu and Jinqiao Shi},
+  title     = {{HSDirSniper}: A New Attack Exploiting Vulnerabilities in {Tor}'s Hidden Service Directories},
+  booktitle = {Proceedings of the {ACM} Web Conference 2024 ({WWW} '24)},
+  year      = {2024},
+  address   = {Singapore},
+  pages     = {1812--1823},
+  publisher = {ACM},
+  doi       = {10.1145/3589334.3645591},
+  url       = {https://doi.org/10.1145/3589334.3645591},
+  urldate   = {2026-08-10}
+}
+
+@inproceedings{sendner2025sybil,
+  author    = {Christoph Sendner and Dominik Schreider and Alexandra Dmitrienko},
+  title     = {Impact Analysis of Sybil Attacks in the {Tor} Network},
+  booktitle = {ICT Systems Security and Privacy Protection ({IFIP} {SEC} 2025)},
+  year      = {2025},
+  series    = {IFIP Advances in Information and Communication Technology},
+  volume    = {746},
+  publisher = {Springer},
+  doi       = {10.1007/978-3-031-92886-4_13},
+  url       = {https://doi.org/10.1007/978-3-031-92886-4_13},
+  urldate   = {2026-08-10}
 }
