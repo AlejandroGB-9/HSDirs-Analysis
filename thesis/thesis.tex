@@ -577,6 +577,416 @@ TP & 25 \\
 \end{center}
 \end{table}
 
+\subsection{HSDir Reliability: Uptime and Stability}
+ 
+This subsection reports the reliability of the observed directories over the observation window, understood as how
+long relays remain active and how stable the deliberately cycled population is from one day to the next. Proceeds from the most direct
+visual of presence over time, through the duration statistics that quantify it, to the rotation-check viewpoint on the cycled population.
+ 
+The uptime matrix is the most direct rendering of which relay is present and when. Each column is a distinct relay and each row a consecutive snapshot, ordered
+with the earliest at the top. Every cell is coloured by one of three states, black marks an active relay in the ring at that snapshot, white marks a 
+relay that went offline listed in the consensus, and purple marks an absent relay from the consensus.
+ 
+Two representations of this same matrix are given for every context and service type, differing only in how the columns are ordered. In the plain representation
+the columns follow first-appearance order with each relay placed left to right by when it first entered the population, this ordering carries no 
+behavioural meaning, and the resulting diagonal purple boundary is merely an artifact of sorting the relays by arrival time. In the clustered represenation 
+columns are instead reordered so that relays with similar uptime sequences sit adjacent. The correlation between every pair of relays' uptime 
+sequences over the whole window is computed, converted to a distance of one minus the Pearson correlation, and passed through single-linkage 
+hierarchical clustering, with the columns laid out in the resulting order. Two relays that rise and fall in unison are thereby placed side by 
+side, whereas two behaving independently are separated. This reordering is what enables the one labeling the plain matrix cannot support, any run of 
+five or more adjacent columns whose uptime sequences are exactly identical is recoloured red. Such sequences are only detectable once clustering has 
+gathered identically behaving relays together; in first-appearance order they would be dispersed and invisible. The plain matrix therefore answers ``who 
+was up, when,'' while the clustered matrix regroups the same cells to answer ``which relays move together.'' The network-wide pair is shown in 
+Figure~\ref{fig:uptime_matrix_network}, the tracked pair in Figure~\ref{fig:uptime_matrix_tracked}, and the three per-service-type pairs in 
+Figures~\ref{fig:uptime_matrix_ev}, \ref{fig:uptime_matrix_sc} and~\ref{fig:uptime_matrix_tp}.
+ 
+\begin{figure*}[htbp]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/network_uptime_matrix.png}}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/network_uptime_matrix_clustered.png}}
+\end{minipage}
+\caption{Network-wide uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\label{fig:uptime_matrix_network}
+\end{figure*}
+ 
+\begin{figure*}[htbp]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/tracked_uptime_matrix.png}}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/tracked_uptime_matrix_clustered.png}}
+\end{minipage}
+\caption{Tracked uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\label{fig:uptime_matrix_tracked}
+\end{figure*}
+ 
+\begin{figure*}[htbp]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_uptime_matrix.png}}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_uptime_matrix_clustered.png}}
+\end{minipage}
+\caption{EV service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\label{fig:uptime_matrix_ev}
+\end{figure*}
+ 
+\begin{figure*}[htbp]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/static_control_uptime_matrix.png}}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/static_control_uptime_matrix_clustered.png}}
+\end{minipage}
+\caption{SC service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\label{fig:uptime_matrix_sc}
+\end{figure*}
+ 
+\begin{figure*}[htbp]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_uptime_matrix.png}}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_uptime_matrix_clustered.png}}
+\end{minipage}
+\caption{TP service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\label{fig:uptime_matrix_tp}
+\end{figure*}
+ 
+Two features of the matrices must be read with care. The large purple share is a consequence of the matrix dimensions rather than a reliability 
+result, with this many snapshots and this many distinct relays gathered into one figure, most relays are part of the population for only a fraction 
+of the full window, so most columns are mostly purple by definition. The meaningful comparison is instead between the two states that describe a 
+relay while it is genuinely part of the population, online against listed offline. Wherever a relay does appear in the consensus, black clearly and consistently 
+outweighs white, which is barely present next to black across the figures. Relays that reach the consensus are therefore more often 
+genuinely active in the ring than merely listed and idle, which is a positive reliability signal and is independent of how much of 
+the matrix is purple. Separately, the clustered network-wide matrix shows several dispersed red blocks of identical uptime sequences. These are an 
+early visual indication of synchronised behaviour across sets of relays and are noted here as a preliminary observation rather than a conclusion, 
+the operator-grouping analysis that follows examines whether such groups correspond to common operators.
+
+Among the service-specific matrices, that of the TP services is visually distinct from the other two. Its black activity does not form broad columns 
+but appears in narrow, progressively later diagonal bands, and a large contiguous red block sits at the very left edge, marking a sizeable group 
+of relays that share a near identical uptime sequence. This qualitative pattern lines up with the duration statistics reported below, where TP stands 
+well apart from SC and EV, as with the network-wide matrix, it is the diagonal streaks and the red block that are the notable features, not the larger 
+purple area, which is again a matter of scale.
+
+Although the matrices indicate the presence qualitatively, the per-day duration statistics quantify its duration. For each day the analysis aggregates the session 
+durations of the active relays that day and reports the daily mean, together with the 15th, 50th and 85th percentiles, in decimal hours. A single 
+overall mean of the daily averages summarises each context and service type. For the tracked context a second, onion-averaged variant is also 
+computed, rather than aggregating every relay session into one set, it first averages the session durations within each probed onion and then averages 
+those per-onion values, so that a small number of heavily hosted onions cannot dominate the figure. Table~\ref{tab:uptime_durations} collects these 
+averages, and the full per-day duration plots on which they are based are provided in Appendix~\ref{app:uptime_duration_plots}. Both sets of plots extend 
+consistently through the full 30-day observation window, with no anomalous behaviour on the final day.
+ 
+The single most notable contrast in this result set is that of TP against the other two service types. Its average session duration, 8.14~hours 
+(7.93~hours onion-averaged), is considerably shorter than those of SC and EV, whose plain averages of 14.18 and 14.16~hours sit close together, and this 
+quantitative gap is exactly what the TP matrix's diagonal band pattern anticipates. This contrast should be interpreted with some limitation, only 13 probed 
+onions, whereas the SC and EV populations each comprise 50. Its duration estimate is therefore derived from a substantially smaller sample and warrants more 
+caution in any comparison that considers it separately from the SC and EV estimates. The smaller sample does not, however, fully account for the patternas 
+demonstrated in the following paragraph.
+ 
+A genuine tension in the reliability assessment concerns TP specifically and is worth stating explicitly rather than a simple side-by-side presentation of 
+the two figures. Although TP has by far the shortest average session duration, its rotated population active share, 97.63\%, is essentially identical to those 
+of SC and EV, at 97.21\% and 97.26\%, all three within half a percentage point of one another, whereas the duration figures place TP well apart. These 
+are two different quantities and need not be correlated. A population can show consistent high per-day presence, most probed relays being active 
+on most days, while its individual sessions are considerably shorter and more fragmented, made up of frequent short disconnect and reconnect cycles 
+rather than one long continuous span. This distinction is also why the small TP sample does not account the whole pattern, were the gap solely a 
+small-sample artefact, both the duration and the active share figures would be expected to show more dispersion for TP. Only the duration measure exhibits
+this pattern, the active share remains within half a point of SC and EV, whereas the duration is roughly forty percent lower. The smaller sample constitutes a 
+legitimate statistical limitation and the contrast between session duration and active fraction remains behaviourally meaningful, both coexistent.
+ 
+The onion-averaged tracked figure, 12.76~hours, is slightly lower than the plain tracked average of 13.89~hours. The two differ because the 
+onion-averaged version equalises the weight of each probed onion prior averaging, preventing a small number of onions hosted by many directories from 
+inflate the average. The plain average, by contrast, weights every relay session equally and so reflects those heavily hosted onions 
+more substantially. The same discrepancy holds within each service type, with the onion-averaged value slightly below the plain throughout Table~\ref{tab:uptime_durations}.
+ 
+\begin{table}[htbp]
+\caption{Average uptime duration (decimal hours)}
+\begin{center}
+\begin{tabular}{|l|r|}
+\hline
+\textbf{Population} & \textbf{Avg.\ duration (h)} \\
+\hline
+Network-wide & 16.68 \\
+\hline
+Tracked & 13.89 \\
+\hline
+Tracked, onion-averaged & 12.76 \\
+\hline
+EV & 14.16 \\
+\hline
+EV, onion-averaged & 13.47 \\
+\hline
+SC & 14.18 \\
+\hline
+SC, onion-averaged & 13.31 \\
+\hline
+TP & 8.14 \\
+\hline
+TP, onion-averaged & 7.93 \\
+\hline
+\end{tabular}
+\label{tab:uptime_durations}
+\end{center}
+\end{table}
+ 
+The rotation-check stream provides a stability check on the deliberately cycled node set, complementing the consensus-based matrices and duration 
+statistics. For each day it reports the fraction of the daily-rotated nodes that were active against the fraction that were inactive, with a 
+service-specific breakdown for the tracked rotation-check stream. Table~\ref{tab:rotated_stability} gives the overall averages. The tracked 
+population is, on this metric, slightly more stable than the general consensus population, at 97.25\% against 96.16\% average active, a small but 
+consistent difference that should not be exaggerated. Across the tracked service types the active sahres are close, with TP slightly highest at 
+97.63\% which, as already discussed, this daily stability coexists with TP's much shorter session durations rather than contradicting them.
+ 
+\begin{table}[htbp]
+\caption{Daily rotated-node active and inactive fractions}
+\begin{center}
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Population} & \textbf{Active (\%)} & \textbf{Inactive (\%)} \\
+\hline
+Rotated network-wide & 96.16 & 3.84 \\
+\hline
+Rotated tracked & 97.25 & 2.75 \\
+\hline
+EV & 97.26 & 2.74 \\
+\hline
+SC & 97.21 & 2.79 \\
+\hline
+TP & 97.63 & 2.37 \\
+\hline
+\end{tabular}
+\label{tab:rotated_stability}
+\end{center}
+\end{table}
+
+\subsection{HSDir Churn and Flag Dynamics}
+ 
+Where the previous subsection measured how long directories remain present, this one measures how they transition between states. The churn 
+engine classifies every entity at each hourly snapshot as one of four mutually informative events, \emph{new}, \emph{disappeared}, 
+\emph{reconnected} or \emph{stripped} of its HSDir flag, with transitions never resetting at day boundaries, and reports each as both a count 
+and a rate per snapshot. Two further analyses build on upon it, the ring-event action rate distribution, which adds a chronological view of directory 
+activity on the tracked population, and the stripped flag analysis, which examines what else is happening to a relay's flags at the 
+moment its HSDir flag is lost. Following the convention of the previous subsection, the rate variant is the primary quantity of interest, the 
+corresponding count variant exist as supplementary material but are not reproduced here.
+
+The most apparent feature of every rate plot is a strong periodicity. The \emph{new}, \emph{disappeared} and \emph{reconnected} lines spike 
+sharply and regularly, and those spikes line up with day boundaries throughout the month rather than falling at random. This is structural 
+rather than anomalous, and it has a concrete protocol explanation. As discussed in subsection ~\ref{subsec:pub-n-index}, the directory authority 
+consensus derives a fresh shared random value once every 1440-minute epoch, compiled at 00:00~UTC, and this value drives a pseudo-random 
+reshuffle of the entire hash ring~\cite{tor_srvspec}. Since each relay’s ring position is recalculated relative to a value that changes daily, 
+the refresh can cause many relays to appear to enter, leave, or re-enter a given region of the directory space, hence a substantial proportion of 
+daily transitions naturally occurs at the daily refresh boundary. The spikes are thus best read as the visible signature of the daily ring 
+reshuffle, not as a succession of independent disruptions. The network-wide rate plot is shown in Figure~\ref{fig:churn_rate_network}, the 
+tracked plot in Figure~\ref{fig:churn_rate_tracked}, and the three per-service-type plots in Figures~\ref{fig:churn_rate_ev}, \ref{fig:churn_rate_sc} and~\ref{fig:churn_rate_tp}.
+ 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/network_churn_rate_per_hour.png}}
+\caption{Network-wide per-snapshot churn rates. \emph{New} plotted positive; \emph{disappeared}, \emph{reconnected} and \emph{stripped} plotted negative.}
+\label{fig:churn_rate_network}
+\end{figure}
+ 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/tracked_churn_rate_per_hour.png}}
+\caption{Tracked per-snapshot churn rates.}
+\label{fig:churn_rate_tracked}
+\end{figure}
+ 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_churn_rate_per_hour.png}}
+\caption{EV per-snapshot churn rates.}
+\label{fig:churn_rate_ev}
+\end{figure}
+ 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/static_control_churn_rate_per_hour.png}}
+\caption{SC per-snapshot churn rates.}
+\label{fig:churn_rate_sc}
+\end{figure}
+ 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_churn_rate_per_hour.png}}
+\caption{TP per-snapshot churn rates.}
+\label{fig:churn_rate_tp}
+\end{figure}
+ 
+The rate figures for the network, tracked, EV and SC populations share another pattern. The \emph{disappeared} and \emph{reconnected} rates 
+consistently and substantially exceed the \emph{new} rate. In the tracked population, for instance, the daily rates are roughly 1.98\% new 
+against 11.19\% disappeared and 10.12\% reconnected, and Tables~\ref{tab:churn_hourly} and~\ref{tab:churn_daily} show the same ordering across 
+the other three of these four populations, following directly from the same daily-reshuffle mechanism. A reshuffle primarily moves 
+already-known relays around the ring rather than introducing previously unseen ones, so it generates many more departure-and-return events than 
+genuine first-time arrivals. The disappeared and reconnected rates therefore track each other closely and both sit well above the new rate, 
+which is what the figures and tables show.
+ 
+The TP population diverges from in magnitude since its churn rates are proportionally far higher than EV's or SC's, at 8.51\% new and 
+13.13\% disappeared on an hourly basis, despite much smaller absolute counts, consistent with the sample-size limitiation established in the 
+previous subsection. TP covers only 13 probed onions against 50 each for EV and SC, so each individual join or leave event is a proportionally 
+larger fluctuation, raising the rates without necessarily indicating intrinsically more variable underlying behaviour. The elevated TP rates 
+should therefore be read with the same caution applied to its shorter session durations earlier.
+ 
+One churn rate, however, does not exhibit the otherwise elevated volatility observed in TP. The \emph{stripped} rate, the rate of HSDir-flag loss, is the 
+lowest of the four in every population, and TP is no exception. Its stripped rate of 1.77\% hourly sits in the same range as EV's and SC's, 
+both near 1.6\%, unlike its other three churn rates which stand well above theirs. This recalls the interpretive pattern already used for the 
+session duration and active fraction contrast in the previous subsection, where metrics that measure different things need not move together. TP is the 
+most volatile population by arrival and departure churn yet an ordinary one by flag-loss churn, and the recurrence of this pattern across a 
+second result set is a point of consistency rather than a coincidence.
+ 
+\begin{table}[htbp]
+\caption{Churn hourly rates (\%)}
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|}
+\hline
+\textbf{Population} & \textbf{New} & \textbf{Disap.} & \textbf{Recon.} & \textbf{Strip.} \\
+\hline
+Network-wide & 0.53 & 3.00 & 2.53 & 2.09 \\
+\hline
+Tracked & 1.87 & 11.20 & 10.23 & 1.58 \\
+\hline
+EV & 2.07 & 12.05 & 11.85 & 1.59 \\
+\hline
+SC & 1.46 & 10.24 & 9.21 & 1.59 \\
+\hline
+TP & 8.51 & 13.13 & 7.93 & 1.77 \\
+\hline
+\end{tabular}
+\label{tab:churn_hourly}
+\end{center}
+\end{table}
+ 
+\begin{table}[htbp]
+\caption{Churn daily rates (\%)}
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|}
+\hline
+\textbf{Population} & \textbf{New} & \textbf{Disap.} & \textbf{Recon.} & \textbf{Strip.} \\
+\hline
+Network-wide & 0.52 & 3.00 & 2.53 & 2.09 \\
+\hline
+Tracked & 1.98 & 11.19 & 10.12 & 1.59 \\
+\hline
+EV & 2.27 & 12.07 & 11.73 & 1.59 \\
+\hline
+SC & 1.53 & 10.20 & 9.12 & 1.60 \\
+\hline
+TP & 8.48 & 13.06 & 7.85 & 1.76 \\
+\hline
+\end{tabular}
+\label{tab:churn_daily}
+\end{center}
+\end{table}
+ 
+The ring-event action rate distribution adds a temporal view events on top of the consensus-snapshot churn. It reports, for the tracked population 
+and each service type, the rate at which the three ring-event actions occur, \texttt{FAILED}, \texttt{RECEIVED} and \texttt{UPLOADED}, both as a 
+HSDir-level aggregate rate over all events and as an onion-averaged rate that weights each probed onion equally so that a heavily hosted onion 
+cannot dominate. Table~\ref{tab:action_h_rates} and ~\ref{tab:action_d_rates} collects these figures.
+ 
+The most notable feature of this distribution is that the TP breakdown contains no \texttt{UPLOADED} category, whereas EV and SC report all three actions. 
+This is a definitional consequence of what third-party probing means since third-party probed onions are services the research infrastructure does not operate, and 
+uploading a descriptor is an action only a service's own operator performs. Against a third party's service, only fetch attempts are possible. The missing cells are marked 
+accordingly in Table~\ref{tab:action_h_rates} and ~\ref{tab:action_d_rates}.
+ 
+A secondary observation concerning the TP breakdown is its \texttt{FAILED} and \texttt{RECEIVED} hour-rates sum to well above 100\%, at 51.28\% and 71.49\% respectively,
+whereas EV's and SC's three-category breakdowns land close to 100\%. A plausible interpretation is that \texttt{FAILED} and \texttt{RECEIVED} are not mutually exclusive 
+within a given period, a HSDir may record both outcomes across different requests, so their rates need not sum to 100\%.
+
+\begin{table}[htbp]
+\caption{Ring-event action hour-rate (\%)}
+\begin{center}
+\begin{tabular}{|l|r|r|r|}
+\hline
+\textbf{Population} & \textbf{FAIL.} & \textbf{RECV.} & \textbf{UPL.} \\
+\hline
+Tracked & 24.25 & 18.69 & 57.06 \\
+\hline
+Tracked, o.-avg. & 21.38 & 18.56 & 60.05 \\
+\hline
+EV & 23.38 & 18.57 & 58.15 \\
+\hline
+EV, o.-avg. & 20.78 & 17.46 & 61.76 \\
+\hline
+SC & 24.75 & 17.79 & 57.49 \\
+\hline
+SC, o.-avg. & 22.04 & 16.02 & 61.93 \\
+\hline
+TP & 51.28 & 71.49 & --- \\
+\hline
+TP, o.-avg. & 27.05 & 72.95 & --- \\
+\hline
+\end{tabular}
+\label{tab:action_h_rates}
+\end{center}
+\end{table}
+
+\begin{table}[htbp]
+\caption{Ring-event action day-rate (\%)}
+\begin{center}
+\begin{tabular}{|l|r|r|r|}
+\hline
+\textbf{Population} & \textbf{FAIL.} & \textbf{RECV.} & \textbf{UPL.} \\
+\hline
+Tracked & 26.04 & 15.65 & 58.30 \\
+\hline
+Tracked, o.-avg. & 25.63 & 21.33 & 53.05 \\
+\hline
+EV & 24.71 & 15.10 & 60.19 \\
+\hline
+EV, o.-avg. & 24.31 & 15.00 & 60.69 \\
+\hline
+SC & 26.84 & 14.69 & 58.47 \\
+\hline
+SC, o.-avg. & 26.49 & 14.49 & 59.02 \\
+\hline
+TP & 37.30 & 62.70 & --- \\
+\hline
+TP, o.-avg. & 27.30 & 72.70 & --- \\
+\hline
+\end{tabular}
+\label{tab:action_d_rates}
+\end{center}
+\end{table}
+ 
+The final analysis characterises, for every moment an HSDir flag is stripped, it records which of the six other flags, \texttt{Fast}, \texttt{Guard}, \texttt{Running}, \texttt{Stable}, \texttt{V2Dir} and 
+\texttt{Valid} remain, distinguishing HSDir-specific loss from broader relay failure. Table~\ref{tab:flag_churn} gives, for each population, the number of stripped events and the presence 
+rate of each flag at the moment of stripping.
+ 
+The clearest observation is that \texttt{Guard} presence at strip time is significantly lower than every other flag, in every population. Roughly 74--78\% 
+against 96--100\% for the other flags. This is a notable finding of the flag-churn analysis and its explanation is that the HSDir flag is 
+gated on a sustained uptime threshold in excess of ninety-six hours~\cite{winter2016sybil}, which same sustained uptime and stability 
+requirement governs the Guard flag. Disruptions severe enough to strip a relay's HSDir flag, a reboot or a prolonged resource-exhaustion outage 
+that resets uptime~\cite{hoeller2024ddos}, frequently disqualifies its Guard eligibility, whereas the other five flags carry less stringent or differently 
+measured requirements and more often persist. The co-occurrence of HSDir and Guard loss is thus expected rather than incidental.
+
+TP records both the lowest \texttt{Guard} presence, at 73.61\%, and the lowest \texttt{Stable} presence, at 96.13\%, of any population 
+at strip time. Consistent with TP being the most volatile and shortest-session population overall, ties this subsection's flag-churn 
+results back to the uptime and stability findings.
+ 
+\begin{table}[htbp]
+\caption{Flag presence at HSDir-strip time (\%), with stripped-event count}
+\begin{center}
+\begin{tabular}{|l|r|r|r|r|r|r|r|}
+\hline
+\textbf{Pop.} & \textbf{N} & \textbf{Fast} & \textbf{Guard} & \textbf{Run.} & \textbf{Stab.} & \textbf{V2Dir} & \textbf{Valid} \\
+\hline
+Network & 19347 & 99.21 & 77.73 & 100.00 & 96.78 & 99.95 & 100.00 \\
+\hline
+Tracked & 13641 & 99.08 & 76.72 & 100.00 & 97.57 & 99.91 & 100.00 \\
+\hline
+EV & 6277 & 99.00 & 76.49 & 100.00 & 97.58 & 99.94 & 100.00 \\
+\hline
+SC & 6951 & 99.14 & 77.11 & 100.00 & 97.64 & 99.88 & 100.00 \\
+\hline
+TP & 413 & 99.52 & 73.61 & 100.00 & 96.13 & 100.00 & 100.00 \\
+\hline
+\end{tabular}
+\label{tab:flag_churn}
+\end{center}
+\end{table}
+
 %Examples of tables and figures
 
 % \begin{table}[htbp]
