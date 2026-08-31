@@ -174,7 +174,7 @@ hmargin=1.5cm
 			\bigskip
 			
 		\end{Large}
-		 	{\Huge ``Security Analysis of Modern Tor V3 Hidden Service Directories"}\\
+		 	{\Huge ``Uptime, Churn, and Concentration: A Month-Long Empirical Study of Tor V3 Hidden Service Directories"}\\
 		 	\vspace*{0.5cm}
 	 		\rule{10.5cm}{0.1mm}\\
 			\vspace*{2cm}
@@ -202,7 +202,7 @@ hmargin=1.5cm
 
 
 
-\title{Security Analysis of Modern Tor V3 Hidden Service Directories}
+\title{Uptime, Churn, and Concentration: A Month-Long Empirical Study of Tor V3 Hidden Service Directories}
 
 \author{\IEEEauthorblockN{Alejandro García Berrocal}
 \IEEEauthorblockA{\textit{Student}, \textit{Carlos III University}, Madrid, Spain,\\
@@ -280,7 +280,10 @@ of six operational entities distributed across the network \cite{tor_rendspec, t
     \item \textbf{Rendezvous Point - RPO:} Ephemeral relays dynamically chosen by the client on the spot. These nodes act as the neutral nexus where the circuit branches from the client and service safely converge.
 \end{enumerate}
 
-%(INCLUDE IMAGE THAT EXPLAINS THE NETWORK)
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/onion_service_structure.png}}
+\caption{Onion service structure}
+\end{figure}
 
 The chronological lifecycle required to establish an end-to-end connection between the client and a V3 onion service transitions through a six cryptographic and operational stages \cite{tor_rendspec, tor_onion_overview}:
 
@@ -321,7 +324,6 @@ byte vector into an Base32 sequence with the domain suffix appended:
 \begin{equation}
 \mathcal{A}_{\text{onion}} = \text{Base32}\big(\textit{P}_{\text{k}} \parallel \textit{C}_{\text{s}} \parallel \textit{V}\big) \parallel \textit{".onion"}
 \end{equation}
-%TODO: Illustration
 
 This infrastructure produces direct implications for network telemetry and monitoring. Because the resulting onion address wraps the raw master key ($\textit{P}_{k}$), any external system that captures the service's address
 can extract the inherent cryptographic key. The master identity key acts as the fundamental parameter to calculate daily blinded keys, which govern the exact time dependent coordinates the service will occupy on the network's HRT
@@ -341,6 +343,11 @@ The consensus cluster of directory authorities produce a newly generated SRV eve
     \item \textbf{Commit Phase (00:00 - 12:00 UTC):} Authorities include cryptographic commitments of privetly generated random numbers within their hourly consensus votes.
     \item \textbf{Reveal Phase (12:00 - 00:00 UTC):} Authorities expose their random values, validating them against the previous phase's commitments. At 00:00 UTC, the final unified SRV is compiled and appended to the live consensus.
 \end{enumerate}
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{images/dht_update.png}}
+\caption{DHT update}
+\end{figure}
 
 This shared secret acts a global seed that inforces pseudo-random reshuffling of the entire hash ring, preventing pre-calculation and maintance of malicious nodes adjacent to a target's publication space \cite{tor_srvspec}.
 
@@ -629,10 +636,10 @@ Figures~\ref{fig:uptime_matrix_ev}, \ref{fig:uptime_matrix_sc} and~\ref{fig:upti
 \begin{figure*}[htbp]
 \centering
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/network_uptime_matrix.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/network_uptime_matrix.png}}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/network_uptime_matrix_clustered.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/network_uptime_matrix_clustered.png}}
 \end{minipage}
 \caption{Network-wide uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
 \label{fig:uptime_matrix_network}
@@ -641,10 +648,10 @@ Figures~\ref{fig:uptime_matrix_ev}, \ref{fig:uptime_matrix_sc} and~\ref{fig:upti
 \begin{figure*}[htbp]
 \centering
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/tracked_uptime_matrix.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/tracked_uptime_matrix.png}}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/tracked_uptime_matrix_clustered.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/tracked_uptime_matrix_clustered.png}}
 \end{minipage}
 \caption{Tracked uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
 \label{fig:uptime_matrix_tracked}
@@ -776,31 +783,31 @@ reshuffle, not as a succession of independent disruptions. The network-wide rate
 tracked plot in Figure~\ref{fig:churn_rate_tracked}, and the three per-service-type plots in Figures~\ref{fig:churn_rate_ev}, \ref{fig:churn_rate_sc} and~\ref{fig:churn_rate_tp}.
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_churn_rate_per_hour.png}}
+\centerline{\includegraphics[width=\linewidth]{images/churn/network_churn_rate_per_hour.png}}
 \caption{Network-wide per-snapshot churn rates. \emph{New} plotted positive; \emph{disappeared}, \emph{reconnected} and \emph{stripped} plotted negative.}
 \label{fig:churn_rate_network}
 \end{figure}
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_churn_rate_per_hour.png}}
+\centerline{\includegraphics[width=\linewidth]{images/churn/tracked_churn_rate_per_hour.png}}
 \caption{Tracked per-snapshot churn rates.}
 \label{fig:churn_rate_tracked}
 \end{figure}
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_churn_rate_per_hour.png}}
+\centerline{\includegraphics[width=\linewidth]{images/churn/ephemeral_variable_churn_rate_per_hour.png}}
 \caption{EV per-snapshot churn rates.}
 \label{fig:churn_rate_ev}
 \end{figure}
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_churn_rate_per_hour.png}}
+\centerline{\includegraphics[width=\linewidth]{images/churn/static_control_churn_rate_per_hour.png}}
 \caption{SC per-snapshot churn rates.}
 \label{fig:churn_rate_sc}
 \end{figure}
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_churn_rate_per_hour.png}}
+\centerline{\includegraphics[width=\linewidth]{images/churn/third_party_probe_churn_rate_per_hour.png}}
 \caption{TP per-snapshot churn rates.}
 \label{fig:churn_rate_tp}
 \end{figure}
@@ -946,8 +953,8 @@ rate of each flag at the moment of stripping.
  
 The clearest observation is that \texttt{Guard} presence at strip time is significantly lower than every other flag, in every population. Roughly 74--78\% 
 against 96--100\% for the other flags. This is a notable finding of the flag-churn analysis and its explanation is that the HSDir flag is 
-gated on a sustained uptime threshold in excess of ninety-six hours~\cite{winter2016sybil}, which same sustained uptime and stability 
-requirement governs the Guard flag. Disruptions severe enough to strip a relay's HSDir flag, a reboot or a prolonged resource-exhaustion outage 
+gated on a sustained uptime threshold in excess of ninety-six hours~\cite{winter2016sybil}, and the Guard flag is governed by a comparable 
+sustained-uptime and stability requirement~\cite{tor_dirspec}. Disruptions severe enough to strip a relay's HSDir flag, a reboot or a prolonged resource-exhaustion outage 
 that resets uptime~\cite{hoeller2024ddos}, frequently disqualifies its Guard eligibility, whereas the other five flags carry less stringent or differently 
 measured requirements and more often persist. The co-occurrence of HSDir and Guard loss is thus expected rather than incidental.
 
@@ -995,7 +1002,7 @@ visible directly in Figure~\ref{fig:family_id_sybil}, where the leading family's
 the whole window.
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_family_id_sybil.png}}
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/network_family_id_sybil.png}}
 \caption{Per-day unique-node count and network share for the top declared-family-identifier groups, network-wide.}
 \label{fig:family_id_sybil}
 \end{figure}
@@ -1022,13 +1029,13 @@ subnet, but nothing forces an operator to reuse an exact address, and prior work
 to evade configuration-based detection~\cite{sendner2025sybil}.
 
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_ip_sybil.png}}
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/network_ip_sybil.png}}
 \caption{Per-day unique-node count and network share for the top exact-IP-address groups, network-wide. Concentration is negligible: the busiest address never exceeds eight nodes.}
 \label{fig:ip_sybil_exact}
 \end{figure}
  
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_ip_24_subnet_sybil.png}}
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/network_ip_24_subnet_sybil.png}}
 \caption{Per-day unique-node count and network share for the top \texttt{/24}-subnet groups, network-wide, for the same population as Figure~\ref{fig:ip_sybil_exact}. The top subnets reach two orders of magnitude more nodes than any single address.}
 \label{fig:ip_sybil_subnet}
 \end{figure}
@@ -1188,7 +1195,7 @@ directory service’s long-term stability, an important distinction when assessi
 
 The primarily question has a direct answer, operator-scale presence is real and detectable, but does not translate into ring-position control. On one hand, 
 operator-scale sybil presence is evident and measurable through structural clustering, one declared family dominates every population holding roughly a tenth 
-of the entire directory set and a larger share as the population narrows (Tables~\ref{tab:famid_count_network} and~\ref{tab:famid_share_network}). And a small, 
+of the entire directory set and a larger share as the population narrows (Table~\ref{tab:famid_count_network}). And a small, 
 recurring set of \texttt{/24} subnets concentrates directories across every context while exact-address concentration stays negligible, consistent with an operator 
 distributing nodes across multiple addresses within the same allocation. On the other hand, this concentration does not translate into disproportionate control of 
 the ring. Position placement remains uniform even for populations with strong sybil concentration (Figure~\ref{fig:ecdf_network}), as the SHA3-256 derivation of ring 
@@ -1221,682 +1228,463 @@ acknowledgments in the unnumbered footnote on the first page.
 
 \section{Results}
 
+\subsection{HSDir Reliability: Uptime and Stability}
+\FloatBarrier
+
 \begin{figure*}[htbp]
 \centering
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_uptime_matrix.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/ephemeral_variable_uptime_matrix.png}}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_uptime_matrix_clustered.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/ephemeral_variable_uptime_matrix_clustered.png}}
 \end{minipage}
-\caption{EV service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\caption{EV uptime matrix: raw (left) and uptime-similarity clustered (right).}
 \label{fig:uptime_matrix_ev}
 \end{figure*}
  
 \begin{figure*}[htbp]
 \centering
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/static_control_uptime_matrix.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/static_control_uptime_matrix.png}}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/static_control_uptime_matrix_clustered.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/static_control_uptime_matrix_clustered.png}}
 \end{minipage}
-\caption{SC service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\caption{SC uptime matrix: raw (left) and uptime-similarity clustered (right).}
 \label{fig:uptime_matrix_sc}
 \end{figure*}
  
 \begin{figure*}[htbp]
 \centering
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_uptime_matrix.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/third_party_probe_uptime_matrix.png}}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_uptime_matrix_clustered.png}}
+\centerline{\includegraphics[width=\linewidth]{images/uptime/third_party_probe_uptime_matrix_clustered.png}}
 \end{minipage}
-\caption{TP service-type uptime matrix in first-appearance column order (left) and reordered by uptime similarity (right).}
+\caption{TP uptime matrix: raw (left) and uptime-similarity clustered (right).}
 \label{fig:uptime_matrix_tp}
 \end{figure*}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_hourly_uptimes.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/uptime/network_hourly_uptimes.png}}
 \caption{Network-wide per-day uptime durations.}
 \label{fig:hourly_network}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{images/tracked_hourly_uptimes.png}
-\includegraphics[width=\linewidth]{images/tracked_onion_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/tracked_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/tracked_onion_hourly_uptimes.png}
 \caption{Tracked per-day uptime durations: plain (top) and onion-averaged (bottom).}
 \label{fig:hourly_tracked}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{images/ephemeral_variable_hourly_uptimes.png}
-\includegraphics[width=\linewidth]{images/ephemeral_variable_onion_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/ephemeral_variable_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/ephemeral_variable_onion_hourly_uptimes.png}
 \caption{EV per-day uptime durations: plain (top) and onion-averaged (bottom).}
 \label{fig:hourly_ev}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{images/static_control_hourly_uptimes.png}
-\includegraphics[width=\linewidth]{images/static_control_onion_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/static_control_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/static_control_onion_hourly_uptimes.png}
 \caption{SC per-day uptime durations: plain (top) and onion-averaged (bottom).}
 \label{fig:hourly_sc}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{images/third_party_probe_hourly_uptimes.png}
-\includegraphics[width=\linewidth]{images/third_party_probe_onion_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/third_party_probe_hourly_uptimes.png}
+\includegraphics[width=\linewidth]{images/uptime/third_party_probe_onion_hourly_uptimes.png}
 \caption{TP per-day uptime durations: plain (top) and onion-averaged (bottom).}
 \label{fig:hourly_tp}
 \end{figure}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by unique-node count --- Network.}
+\FloatBarrier
+\subsection{Operator Identity and Sybil Concentration}
+\FloatBarrier
+
+\begin{table}[H]
+\caption{Top declared-family groups --- Network.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Nodes} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 775 \\ \hline
-2 & \texttt{IgJeqr1GmahHPLhX6TQki} & 320 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 257 \\ \hline
-4 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 252 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 123 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 775 & 9.82 \\ \hline
+2 & \texttt{IgJeqr1GmahHPLh} & 320 & 4.05 \\ \hline
+3 & \texttt{5vHhiPVy3pZwFsR} & 257 & 3.26 \\ \hline
+4 & \texttt{cagGVCNHwlHnE5O} & 252 & 3.19 \\ \hline
+5 & \texttt{YTCZ7hE06qMkdfr} & 123 & 1.56 \\ \hline
 \end{tabular}
 \label{tab:famid_count_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by network share --- Network.}
+\begin{table}[H]
+\caption{Top declared-family groups --- Tracked.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 9.8201 \\ \hline
-2 & \texttt{IgJeqr1GmahHPLhX6TQki} & 4.0547 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 3.2565 \\ \hline
-4 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 3.1931 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 1.5585 \\ \hline
-\end{tabular}
-\label{tab:famid_share_network}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top declared-family groups by unique-node count --- Tracked.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Nodes} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 775 \\ \hline
-2 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 242 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 240 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 212 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 123 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 775 & 10.44 \\ \hline
+2 & \texttt{cagGVCNHwlHnE5O} & 242 & 3.26 \\ \hline
+3 & \texttt{5vHhiPVy3pZwFsR} & 240 & 3.23 \\ \hline
+4 & \texttt{IgJeqr1GmahHPLh} & 212 & 2.86 \\ \hline
+5 & \texttt{YTCZ7hE06qMkdfr} & 123 & 1.66 \\ \hline
 \end{tabular}
 \label{tab:famid_count_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by network share --- Tracked.}
+\begin{table}[H]
+\caption{Top declared-family groups --- EV.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 10.4377 \\ \hline
-2 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 3.2593 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 3.2323 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 2.8552 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 1.6566 \\ \hline
-\end{tabular}
-\label{tab:famid_share_tracked}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top declared-family groups by unique-node count --- EV.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Nodes} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 772 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 225 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 221 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 146 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 122 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 772 & 11.01 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 225 & 3.21 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 221 & 3.15 \\ \hline
+4 & \texttt{IgJeqr1GmahHPLh} & 146 & 2.08 \\ \hline
+5 & \texttt{YTCZ7hE06qMkdfr} & 122 & 1.74 \\ \hline
 \end{tabular}
 \label{tab:famid_count_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by network share --- EV.}
+\begin{table}[H]
+\caption{Top declared-family groups --- SC.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 11.0113 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 3.2092 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 3.1522 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 2.0824 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 1.7401 \\ \hline
-\end{tabular}
-\label{tab:famid_share_ephemeral_variable}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top declared-family groups by unique-node count --- SC.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Nodes} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 760 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 216 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 209 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 138 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 117 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 760 & 11.16 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 216 & 3.17 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 209 & 3.07 \\ \hline
+4 & \texttt{IgJeqr1GmahHPLh} & 138 & 2.03 \\ \hline
+5 & \texttt{YTCZ7hE06qMkdfr} & 117 & 1.72 \\ \hline
 \end{tabular}
 \label{tab:famid_count_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by network share --- SC.}
+\begin{table}[H]
+\caption{Top declared-family groups --- TP.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 11.1584 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 3.1713 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 3.0686 \\ \hline
-4 & \texttt{IgJeqr1GmahHPLhX6TQki} & 2.0261 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 1.7178 \\ \hline
-\end{tabular}
-\label{tab:famid_share_static_control}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top declared-family groups by unique-node count --- TP.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Nodes} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 294 \\ \hline
-2 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 48 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 44 \\ \hline
-4 & \texttt{i2Dfzk60I2eG99oK/ooKG} & 32 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 29 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 294 & 13.54 \\ \hline
+2 & \texttt{cagGVCNHwlHnE5O} & 48 & 2.21 \\ \hline
+3 & \texttt{5vHhiPVy3pZwFsR} & 44 & 2.03 \\ \hline
+4 & \texttt{i2Dfzk60I2eG99o} & 32 & 1.47 \\ \hline
+5 & \texttt{YTCZ7hE06qMkdfr} & 29 & 1.34 \\ \hline
 \end{tabular}
 \label{tab:famid_count_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top declared-family groups by network share --- TP.}
+\begin{table}[H]
+\caption{Top exact-IP groups --- Network.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 13.5421 \\ \hline
-2 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 2.2110 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 2.0267 \\ \hline
-4 & \texttt{i2Dfzk60I2eG99oK/ooKG} & 1.4740 \\ \hline
-5 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 1.3358 \\ \hline
-\end{tabular}
-\label{tab:famid_share_third_party_probe}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top exact-IP groups by unique-node count --- Network.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} \\ \hline
-1 & \texttt{107.208.159.58} & 16 \\ \hline
-2 & \texttt{185.243.218.231} & 8 \\ \hline
-3 & \texttt{184.8.85.200} & 8 \\ \hline
-4 & \texttt{185.243.218.232} & 8 \\ \hline
-5 & \texttt{185.243.218.233} & 8 \\ \hline
+\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{107.208.159.58} & 16 & 0.20 \\ \hline
+2 & \texttt{185.243.218.231} & 8 & 0.10 \\ \hline
+3 & \texttt{184.8.85.200} & 8 & 0.10 \\ \hline
+4 & \texttt{185.243.218.232} & 8 & 0.10 \\ \hline
+5 & \texttt{185.243.218.233} & 8 & 0.10 \\ \hline
 \end{tabular}
 \label{tab:ip_count_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top exact-IP groups by network share --- Network.}
+\begin{table}[H]
+\caption{Top exact-IP groups --- Tracked.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{107.208.159.58} & 0.2027 \\ \hline
-2 & \texttt{185.243.218.231} & 0.1014 \\ \hline
-3 & \texttt{184.8.85.200} & 0.1014 \\ \hline
-4 & \texttt{185.243.218.232} & 0.1014 \\ \hline
-5 & \texttt{185.243.218.233} & 0.1014 \\ \hline
-\end{tabular}
-\label{tab:ip_share_network}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top exact-IP groups by unique-node count --- Tracked.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} \\ \hline
-1 & \texttt{107.208.159.58} & 10 \\ \hline
-2 & \texttt{171.25.193.39} & 8 \\ \hline
-3 & \texttt{171.25.193.36} & 8 \\ \hline
-4 & \texttt{171.25.193.35} & 8 \\ \hline
-5 & \texttt{82.153.138.57} & 8 \\ \hline
+\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{107.208.159.58} & 10 & 0.13 \\ \hline
+2 & \texttt{171.25.193.39} & 8 & 0.11 \\ \hline
+3 & \texttt{171.25.193.36} & 8 & 0.11 \\ \hline
+4 & \texttt{171.25.193.35} & 8 & 0.11 \\ \hline
+5 & \texttt{82.153.138.57} & 8 & 0.11 \\ \hline
 \end{tabular}
 \label{tab:ip_count_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top exact-IP groups by network share --- Tracked.}
+\begin{table}[H]
+\caption{Top exact-IP groups --- EV.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{107.208.159.58} & 0.1347 \\ \hline
-2 & \texttt{171.25.193.39} & 0.1077 \\ \hline
-3 & \texttt{171.25.193.36} & 0.1077 \\ \hline
-4 & \texttt{171.25.193.35} & 0.1077 \\ \hline
-5 & \texttt{82.153.138.57} & 0.1077 \\ \hline
-\end{tabular}
-\label{tab:ip_share_tracked}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top exact-IP groups by unique-node count --- EV.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} \\ \hline
-1 & \texttt{154.53.58.161} & 8 \\ \hline
-2 & \texttt{171.25.193.39} & 8 \\ \hline
-3 & \texttt{95.214.53.96} & 8 \\ \hline
-4 & \texttt{94.142.241.153} & 8 \\ \hline
-5 & \texttt{171.25.193.40} & 8 \\ \hline
+\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{154.53.58.161} & 8 & 0.11 \\ \hline
+2 & \texttt{171.25.193.39} & 8 & 0.11 \\ \hline
+3 & \texttt{95.214.53.96} & 8 & 0.11 \\ \hline
+4 & \texttt{94.142.241.153} & 8 & 0.11 \\ \hline
+5 & \texttt{171.25.193.40} & 8 & 0.11 \\ \hline
 \end{tabular}
 \label{tab:ip_count_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top exact-IP groups by network share --- EV.}
+\begin{table}[H]
+\caption{Top exact-IP groups --- SC.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{154.53.58.161} & 0.1141 \\ \hline
-2 & \texttt{171.25.193.39} & 0.1141 \\ \hline
-3 & \texttt{95.214.53.96} & 0.1141 \\ \hline
-4 & \texttt{94.142.241.153} & 0.1141 \\ \hline
-5 & \texttt{171.25.193.40} & 0.1141 \\ \hline
-\end{tabular}
-\label{tab:ip_share_ephemeral_variable}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top exact-IP groups by unique-node count --- SC.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} \\ \hline
-1 & \texttt{193.74.17.56} & 8 \\ \hline
-2 & \texttt{80.67.167.81} & 8 \\ \hline
-3 & \texttt{87.236.199.223} & 8 \\ \hline
-4 & \texttt{80.94.92.92} & 8 \\ \hline
-5 & \texttt{171.25.193.39} & 8 \\ \hline
+\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{193.74.17.56} & 8 & 0.12 \\ \hline
+2 & \texttt{80.67.167.81} & 8 & 0.12 \\ \hline
+3 & \texttt{87.236.199.223} & 8 & 0.12 \\ \hline
+4 & \texttt{80.94.92.92} & 8 & 0.12 \\ \hline
+5 & \texttt{171.25.193.39} & 8 & 0.12 \\ \hline
 \end{tabular}
 \label{tab:ip_count_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top exact-IP groups by network share --- SC.}
+\begin{table}[H]
+\caption{Top exact-IP groups --- TP.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{193.74.17.56} & 0.1175 \\ \hline
-2 & \texttt{80.67.167.81} & 0.1175 \\ \hline
-3 & \texttt{87.236.199.223} & 0.1175 \\ \hline
-4 & \texttt{80.94.92.92} & 0.1175 \\ \hline
-5 & \texttt{171.25.193.39} & 0.1175 \\ \hline
-\end{tabular}
-\label{tab:ip_share_static_control}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top exact-IP groups by unique-node count --- TP.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} \\ \hline
-1 & \texttt{94.142.241.153} & 6 \\ \hline
-2 & \texttt{67.163.153.240} & 6 \\ \hline
-3 & \texttt{116.255.1.163} & 5 \\ \hline
-4 & \texttt{192.3.140.104} & 5 \\ \hline
-5 & \texttt{185.243.218.231} & 5 \\ \hline
+\textbf{Rank} & \textbf{IP address} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{94.142.241.153} & 6 & 0.28 \\ \hline
+2 & \texttt{67.163.153.240} & 6 & 0.28 \\ \hline
+3 & \texttt{116.255.1.163} & 5 & 0.23 \\ \hline
+4 & \texttt{192.3.140.104} & 5 & 0.23 \\ \hline
+5 & \texttt{185.243.218.231} & 5 & 0.23 \\ \hline
 \end{tabular}
 \label{tab:ip_count_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top exact-IP groups by network share --- TP.}
+\begin{table}[H]
+\caption{Top \texttt{/24}-subnet groups --- Network.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{IP address} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{94.142.241.153} & 0.2764 \\ \hline
-2 & \texttt{67.163.153.240} & 0.2764 \\ \hline
-3 & \texttt{116.255.1.163} & 0.2303 \\ \hline
-4 & \texttt{192.3.140.104} & 0.2303 \\ \hline
-5 & \texttt{185.243.218.231} & 0.2303 \\ \hline
-\end{tabular}
-\label{tab:ip_share_third_party_probe}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by unique-node count --- Network.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} \\ \hline
-1 & \texttt{204.8.96.0/24} & 321 \\ \hline
-2 & \texttt{64.65.62.0/24} & 244 \\ \hline
-3 & \texttt{96.9.98.0/24} & 216 \\ \hline
-4 & \texttt{64.65.1.0/24} & 192 \\ \hline
-5 & \texttt{192.42.116.0/24} & 154 \\ \hline
+\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{204.8.96.0/24} & 321 & 4.07 \\ \hline
+2 & \texttt{64.65.62.0/24} & 244 & 3.09 \\ \hline
+3 & \texttt{96.9.98.0/24} & 216 & 2.74 \\ \hline
+4 & \texttt{64.65.1.0/24} & 192 & 2.43 \\ \hline
+5 & \texttt{192.42.116.0/24} & 154 & 1.95 \\ \hline
 \end{tabular}
 \label{tab:subnet_count_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by network share --- Network.}
+\begin{table}[H]
+\caption{Top \texttt{/24}-subnet groups --- Tracked.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{204.8.96.0/24} & 4.0674 \\ \hline
-2 & \texttt{64.65.62.0/24} & 3.0917 \\ \hline
-3 & \texttt{96.9.98.0/24} & 2.7369 \\ \hline
-4 & \texttt{64.65.1.0/24} & 2.4328 \\ \hline
-5 & \texttt{192.42.116.0/24} & 1.9513 \\ \hline
-\end{tabular}
-\label{tab:subnet_share_network}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by unique-node count --- Tracked.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} \\ \hline
-1 & \texttt{64.65.62.0/24} & 244 \\ \hline
-2 & \texttt{96.9.98.0/24} & 216 \\ \hline
-3 & \texttt{204.8.96.0/24} & 212 \\ \hline
-4 & \texttt{64.65.1.0/24} & 192 \\ \hline
-5 & \texttt{192.42.116.0/24} & 154 \\ \hline
+\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{64.65.62.0/24} & 244 & 3.29 \\ \hline
+2 & \texttt{96.9.98.0/24} & 216 & 2.91 \\ \hline
+3 & \texttt{204.8.96.0/24} & 212 & 2.86 \\ \hline
+4 & \texttt{64.65.1.0/24} & 192 & 2.59 \\ \hline
+5 & \texttt{192.42.116.0/24} & 154 & 2.07 \\ \hline
 \end{tabular}
 \label{tab:subnet_count_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by network share --- Tracked.}
+\begin{table}[H]
+\caption{Top \texttt{/24}-subnet groups --- EV.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{64.65.62.0/24} & 3.2862 \\ \hline
-2 & \texttt{96.9.98.0/24} & 2.9091 \\ \hline
-3 & \texttt{204.8.96.0/24} & 2.8552 \\ \hline
-4 & \texttt{64.65.1.0/24} & 2.5859 \\ \hline
-5 & \texttt{192.42.116.0/24} & 2.0741 \\ \hline
-\end{tabular}
-\label{tab:subnet_share_tracked}
-\end{center}\end{table}
-\clearpage
- 
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by unique-node count --- EV.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} \\ \hline
-1 & \texttt{64.65.62.0/24} & 243 \\ \hline
-2 & \texttt{96.9.98.0/24} & 216 \\ \hline
-3 & \texttt{64.65.1.0/24} & 190 \\ \hline
-4 & \texttt{192.42.116.0/24} & 152 \\ \hline
-5 & \texttt{204.8.96.0/24} & 146 \\ \hline
+\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{64.65.62.0/24} & 243 & 3.47 \\ \hline
+2 & \texttt{96.9.98.0/24} & 216 & 3.08 \\ \hline
+3 & \texttt{64.65.1.0/24} & 190 & 2.71 \\ \hline
+4 & \texttt{192.42.116.0/24} & 152 & 2.17 \\ \hline
+5 & \texttt{204.8.96.0/24} & 146 & 2.08 \\ \hline
 \end{tabular}
 \label{tab:subnet_count_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by network share --- EV.}
+\begin{table}[H]
+\caption{Top \texttt{/24}-subnet groups --- SC.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{64.65.62.0/24} & 3.4660 \\ \hline
-2 & \texttt{96.9.98.0/24} & 3.0809 \\ \hline
-3 & \texttt{64.65.1.0/24} & 2.7100 \\ \hline
-4 & \texttt{192.42.116.0/24} & 2.1680 \\ \hline
-5 & \texttt{204.8.96.0/24} & 2.0824 \\ \hline
-\end{tabular}
-\label{tab:subnet_share_ephemeral_variable}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by unique-node count --- SC.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} \\ \hline
-1 & \texttt{64.65.62.0/24} & 241 \\ \hline
-2 & \texttt{96.9.98.0/24} & 211 \\ \hline
-3 & \texttt{64.65.1.0/24} & 190 \\ \hline
-4 & \texttt{192.42.116.0/24} & 152 \\ \hline
-5 & \texttt{204.8.96.0/24} & 138 \\ \hline
+\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{64.65.62.0/24} & 241 & 3.54 \\ \hline
+2 & \texttt{96.9.98.0/24} & 211 & 3.10 \\ \hline
+3 & \texttt{64.65.1.0/24} & 190 & 2.79 \\ \hline
+4 & \texttt{192.42.116.0/24} & 152 & 2.23 \\ \hline
+5 & \texttt{204.8.96.0/24} & 138 & 2.03 \\ \hline
 \end{tabular}
 \label{tab:subnet_count_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by network share --- SC.}
+\begin{table}[H]
+\caption{Top \texttt{/24}-subnet groups --- TP.}
 \begin{center}\small
-\begin{tabular}{|r|l|r|}
+\begin{tabular}{|r|l|r|r|}
 \hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{64.65.62.0/24} & 3.5384 \\ \hline
-2 & \texttt{96.9.98.0/24} & 3.0979 \\ \hline
-3 & \texttt{64.65.1.0/24} & 2.7896 \\ \hline
-4 & \texttt{192.42.116.0/24} & 2.2317 \\ \hline
-5 & \texttt{204.8.96.0/24} & 2.0261 \\ \hline
-\end{tabular}
-\label{tab:subnet_share_static_control}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by unique-node count --- TP.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} \\ \hline
-1 & \texttt{64.65.62.0/24} & 98 \\ \hline
-2 & \texttt{64.65.1.0/24} & 82 \\ \hline
-3 & \texttt{96.9.98.0/24} & 77 \\ \hline
-4 & \texttt{192.42.116.0/24} & 46 \\ \hline
-5 & \texttt{23.129.64.0/24} & 32 \\ \hline
+\textbf{Rank} & \textbf{Subnet} & \textbf{Nodes} & \textbf{Share (\%)} \\ \hline
+1 & \texttt{64.65.62.0/24} & 98 & 4.51 \\ \hline
+2 & \texttt{64.65.1.0/24} & 82 & 3.78 \\ \hline
+3 & \texttt{96.9.98.0/24} & 77 & 3.55 \\ \hline
+4 & \texttt{192.42.116.0/24} & 46 & 2.12 \\ \hline
+5 & \texttt{23.129.64.0/24} & 32 & 1.47 \\ \hline
 \end{tabular}
 \label{tab:subnet_count_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
-\caption{Top \texttt{/24}-subnet groups by network share --- TP.}
-\begin{center}\small
-\begin{tabular}{|r|l|r|}
-\hline
-\textbf{Rank} & \textbf{Subnet} & \textbf{Share (\%)} \\ \hline
-1 & \texttt{64.65.62.0/24} & 4.5140 \\ \hline
-2 & \texttt{64.65.1.0/24} & 3.7771 \\ \hline
-3 & \texttt{96.9.98.0/24} & 3.5468 \\ \hline
-4 & \texttt{192.42.116.0/24} & 2.1188 \\ \hline
-5 & \texttt{23.129.64.0/24} & 1.4740 \\ \hline
-\end{tabular}
-\label{tab:subnet_share_third_party_probe}
-\end{center}\end{table}
- 
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: partial-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 196 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 153 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 118 \\ \hline
-4 & \texttt{F93+I20y7I9Y2jqmK+lHM} & 84 \\ \hline
-5 & \texttt{46J5htZq56gwAdAcbe13f} & 71 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 196 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 153 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 118 \\ \hline
+4 & \texttt{F93+I20y7I9Y2jq} & 84 \\ \hline
+5 & \texttt{46J5htZq56gwAdA} & 71 \\ \hline
 \end{tabular}
 \label{tab:famdrop_partial_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: total-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{A1c+7nA7nr7C1UTZnQfg3} & 12 \\ \hline
-2 & \texttt{90LM8nvZE0IQle/yHhxoK} & 8 \\ \hline
-3 & \texttt{diHFmyrGgjlFxrPXayMwM} & 8 \\ \hline
-4 & \texttt{LBTaj5ouM26C2HmlZKKhV} & 7 \\ \hline
-5 & \texttt{SzJPStiCcWG4/7SgRqKaJ} & 7 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{A1c+7nA7nr7C1UT} & 12 \\ \hline
+2 & \texttt{90LM8nvZE0IQle/} & 8 \\ \hline
+3 & \texttt{diHFmyrGgjlFxrP} & 8 \\ \hline
+4 & \texttt{LBTaj5ouM26C2Hm} & 7 \\ \hline
+5 & \texttt{SzJPStiCcWG4/7S} & 7 \\ \hline
 \end{tabular}
 \label{tab:famdrop_total_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: partial-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 260 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 186 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 158 \\ \hline
-4 & \texttt{F93+I20y7I9Y2jqmK+lHM} & 79 \\ \hline
-5 & \texttt{lOsJh1ANJ1/JkKFJMBzqx} & 59 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 260 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 186 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 158 \\ \hline
+4 & \texttt{F93+I20y7I9Y2jq} & 79 \\ \hline
+5 & \texttt{lOsJh1ANJ1/JkKF} & 59 \\ \hline
 \end{tabular}
 \label{tab:famdrop_partial_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: total-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 19 \\ \hline
-2 & \texttt{DFRImPtN+OgGNWRuvzaeg} & 19 \\ \hline
-3 & \texttt{haw9ZBtD2D5f9edgWX+uL} & 17 \\ \hline
-4 & \texttt{i2Dfzk60I2eG99oK/ooKG} & 15 \\ \hline
-5 & \texttt{SzJPStiCcWG4/7SgRqKaJ} & 12 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{YTCZ7hE06qMkdfr} & 19 \\ \hline
+2 & \texttt{DFRImPtN+OgGNWR} & 19 \\ \hline
+3 & \texttt{haw9ZBtD2D5f9ed} & 17 \\ \hline
+4 & \texttt{i2Dfzk60I2eG99o} & 15 \\ \hline
+5 & \texttt{SzJPStiCcWG4/7S} & 12 \\ \hline
 \end{tabular}
 \label{tab:famdrop_total_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: partial-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 164 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 112 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 100 \\ \hline
-4 & \texttt{F93+I20y7I9Y2jqmK+lHM} & 51 \\ \hline
-5 & \texttt{IgJeqr1GmahHPLhX6TQki} & 34 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 164 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 112 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 100 \\ \hline
+4 & \texttt{F93+I20y7I9Y2jq} & 51 \\ \hline
+5 & \texttt{IgJeqr1GmahHPLh} & 34 \\ \hline
 \end{tabular}
 \label{tab:famdrop_partial_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: total-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 18 \\ \hline
-2 & \texttt{DFRImPtN+OgGNWRuvzaeg} & 16 \\ \hline
-3 & \texttt{haw9ZBtD2D5f9edgWX+uL} & 16 \\ \hline
-4 & \texttt{i2Dfzk60I2eG99oK/ooKG} & 12 \\ \hline
-5 & \texttt{Or+tKhdy84NCOAz/Qqk6K} & 11 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{YTCZ7hE06qMkdfr} & 18 \\ \hline
+2 & \texttt{DFRImPtN+OgGNWR} & 16 \\ \hline
+3 & \texttt{haw9ZBtD2D5f9ed} & 16 \\ \hline
+4 & \texttt{i2Dfzk60I2eG99o} & 12 \\ \hline
+5 & \texttt{Or+tKhdy84NCOAz} & 11 \\ \hline
 \end{tabular}
 \label{tab:famdrop_total_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: partial-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 199 \\ \hline
-2 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 126 \\ \hline
-3 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 92 \\ \hline
-4 & \texttt{F93+I20y7I9Y2jqmK+lHM} & 46 \\ \hline
-5 & \texttt{lOsJh1ANJ1/JkKFJMBzqx} & 34 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 199 \\ \hline
+2 & \texttt{5vHhiPVy3pZwFsR} & 126 \\ \hline
+3 & \texttt{cagGVCNHwlHnE5O} & 92 \\ \hline
+4 & \texttt{F93+I20y7I9Y2jq} & 46 \\ \hline
+5 & \texttt{lOsJh1ANJ1/JkKF} & 34 \\ \hline
 \end{tabular}
 \label{tab:famdrop_partial_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: total-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 15 \\ \hline
-2 & \texttt{DFRImPtN+OgGNWRuvzaeg} & 15 \\ \hline
-3 & \texttt{i2Dfzk60I2eG99oK/ooKG} & 14 \\ \hline
-4 & \texttt{KlIcMNrJQEDPgTg0/HQFe} & 11 \\ \hline
-5 & \texttt{Or+tKhdy84NCOAz/Qqk6K} & 11 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{YTCZ7hE06qMkdfr} & 15 \\ \hline
+2 & \texttt{DFRImPtN+OgGNWR} & 15 \\ \hline
+3 & \texttt{i2Dfzk60I2eG99o} & 14 \\ \hline
+4 & \texttt{KlIcMNrJQEDPgTg} & 11 \\ \hline
+5 & \texttt{Or+tKhdy84NCOAz} & 11 \\ \hline
 \end{tabular}
 \label{tab:famdrop_total_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: partial-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{ri96phwtVtkwug/HYkK4R} & 36 \\ \hline
-2 & \texttt{cagGVCNHwlHnE5Ozbdqm4} & 9 \\ \hline
-3 & \texttt{5vHhiPVy3pZwFsR2GBudh} & 4 \\ \hline
-4 & \texttt{46J5htZq56gwAdAcbe13f} & 3 \\ \hline
-5 & \texttt{F93+I20y7I9Y2jqmK+lHM} & 1 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{ri96phwtVtkwug/} & 36 \\ \hline
+2 & \texttt{cagGVCNHwlHnE5O} & 9 \\ \hline
+3 & \texttt{5vHhiPVy3pZwFsR} & 4 \\ \hline
+4 & \texttt{46J5htZq56gwAdA} & 3 \\ \hline
+5 & \texttt{F93+I20y7I9Y2jq} & 1 \\ \hline
 \end{tabular}
 \label{tab:famdrop_partial_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Family-ID entity drops: total-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
 \hline
-\textbf{Rank} & \textbf{Family ID (first 21 chars)} & \textbf{Snapshots} \\ \hline
-1 & \texttt{IgJeqr1GmahHPLhX6TQki} & 15 \\ \hline
-2 & \texttt{YTCZ7hE06qMkdfrUP+Hy1} & 10 \\ \hline
-3 & \texttt{DFRImPtN+OgGNWRuvzaeg} & 6 \\ \hline
-4 & \texttt{RkrBlpP1WMUElRBqPLhYO} & 4 \\ \hline
-5 & \texttt{/2h1rENAM4TSSv4bmVLWd} & 3 \\ \hline
+\textbf{Rank} & \textbf{Family ID} & \textbf{Snapshots} \\ \hline
+1 & \texttt{IgJeqr1GmahHPLh} & 15 \\ \hline
+2 & \texttt{YTCZ7hE06qMkdfr} & 10 \\ \hline
+3 & \texttt{DFRImPtN+OgGNWR} & 6 \\ \hline
+4 & \texttt{RkrBlpP1WMUElRB} & 4 \\ \hline
+5 & \texttt{/2h1rENAM4TSSv4} & 3 \\ \hline
 \end{tabular}
 \label{tab:famdrop_total_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: partial-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1911,7 +1699,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_partial_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: total-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1926,7 +1714,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_total_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: partial-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1941,7 +1729,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_partial_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: total-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1956,7 +1744,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_total_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: partial-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1971,7 +1759,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_partial_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: total-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -1986,7 +1774,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_total_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: partial-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2001,7 +1789,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_partial_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: total-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2016,7 +1804,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_total_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: partial-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2028,7 +1816,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_partial_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Exact-IP entity drops: total-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2043,7 +1831,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipdrop_total_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: partial-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2058,7 +1846,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_partial_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: total-drop snapshot count --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2073,7 +1861,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_total_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: partial-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2088,7 +1876,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_partial_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: total-drop snapshot count --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2103,7 +1891,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_total_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: partial-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2118,7 +1906,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_partial_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: total-drop snapshot count --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2133,7 +1921,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_total_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: partial-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2148,7 +1936,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_partial_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: total-drop snapshot count --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2163,7 +1951,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_total_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: partial-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2178,7 +1966,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_partial_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{\texttt{/24}-subnet entity drops: total-drop snapshot count --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2193,7 +1981,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetdrop_total_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname fingerprint mutation --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2208,7 +1996,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:fpchg_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname fingerprint mutation --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2223,7 +2011,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:fpchg_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname fingerprint mutation --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2238,7 +2026,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:fpchg_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname fingerprint mutation --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2253,7 +2041,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:fpchg_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname fingerprint mutation --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2268,7 +2056,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:fpchg_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname IP-address mutation --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2283,7 +2071,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipchg_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname IP-address mutation --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2298,7 +2086,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipchg_tracked}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname IP-address mutation --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2313,7 +2101,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipchg_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname IP-address mutation --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2328,7 +2116,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipchg_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname IP-address mutation --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2343,7 +2131,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:ipchg_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname subnet mutation --- Network.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2358,7 +2146,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetchg_network}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname subnet mutation --- Tracked.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2372,9 +2160,8 @@ acknowledgments in the unnumbered footnote on the first page.
 \end{tabular}
 \label{tab:subnetchg_tracked}
 \end{center}\end{table}
-\clearpage
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname subnet mutation --- EV.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2389,7 +2176,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetchg_ephemeral_variable}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname subnet mutation --- SC.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2404,7 +2191,7 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetchg_static_control}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Nickname subnet mutation --- TP.}
 \begin{center}\small
 \begin{tabular}{|r|l|r|}
@@ -2419,37 +2206,37 @@ acknowledgments in the unnumbered footnote on the first page.
 \label{tab:subnetchg_third_party_probe}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Undeclared-family per-day averages, no-ID-focused (nodes/day).}
 \begin{center}\small
 \begin{tabular}{|l|r|r|r|}
 \hline
 \textbf{Population} & \textbf{Mixed} & \textbf{Only-with-ID} & \textbf{Only-without-ID} \\ \hline
-Network & 13.3333 & 1.5000 & 811.5667 \\ \hline
-Tracked & 5.5000 & 0.4667 & 418.1333 \\ \hline
-EV & 2.4333 & 0.1333 & 187.7667 \\ \hline
-SC & 2.6667 & 0.3000 & 209.7000 \\ \hline
-TP & 0.4000 & 0.0333 & 20.6667 \\ \hline
+Network & 13.33 & 1.50 & 811.57 \\ \hline
+Tracked & 5.50 & 0.47 & 418.13 \\ \hline
+EV & 2.43 & 0.13 & 187.77 \\ \hline
+SC & 2.67 & 0.30 & 209.70 \\ \hline
+TP & 0.40 & 0.03 & 20.67 \\ \hline
 \end{tabular}
 \label{tab:undeclared_perday_noid}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Undeclared-family per-day averages, with-ID-focused (nodes/day).}
 \begin{center}\small
 \begin{tabular}{|l|r|r|r|}
 \hline
 \textbf{Population} & \textbf{Mixed} & \textbf{Only-with-ID} & \textbf{Only-without-ID} \\ \hline
-Network & 0.0000 & 0.1333 & 8.4667 \\ \hline
-Tracked & 0.0000 & 0.0000 & 2.3000 \\ \hline
-EV & 0.0000 & 0.0000 & 1.1000 \\ \hline
-SC & 0.0000 & 0.0000 & 1.1333 \\ \hline
-TP & 0.0000 & 0.0000 & 0.0667 \\ \hline
+Network & 0.00 & 0.13 & 8.47 \\ \hline
+Tracked & 0.00 & 0.00 & 2.30 \\ \hline
+EV & 0.00 & 0.00 & 1.10 \\ \hline
+SC & 0.00 & 0.00 & 1.13 \\ \hline
+TP & 0.00 & 0.00 & 0.07 \\ \hline
 \end{tabular}
 \label{tab:undeclared_perday_wid}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Undeclared-family month-wide totals, no-ID-focused (all consensuses).}
 \begin{center}\small
 \begin{tabular}{|l|r|r|r|}
@@ -2464,7 +2251,7 @@ TP & 12 & 1 & 483 \\ \hline
 \label{tab:undeclared_month_noid}
 \end{center}\end{table}
  
-\begin{table}[htbp]
+\begin{table}[H]
 \caption{Undeclared-family month-wide totals, with-ID-focused (all consensuses).}
 \begin{center}\small
 \begin{tabular}{|l|r|r|r|}
@@ -2479,321 +2266,324 @@ TP & 0 & 1 & 25 \\ \hline
 \label{tab:undeclared_month_wid}
 \end{center}\end{table}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_family_id_entity_drops.png}}
-\caption{ephemeral variable family id entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/ephemeral_variable_family_id_entity_drops.png}}
+\caption{Family-ID entity drops --- EV.}
 \label{fig:app_ephemeral_variable_family_id_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_family_id_sybil.png}}
-\caption{ephemeral variable family id sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/ephemeral_variable_family_id_sybil.png}}
+\caption{Declared-family concentration --- EV.}
 \label{fig:app_ephemeral_variable_family_id_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_family_id_entity_drops.png}}
-\caption{network family id entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/network_family_id_entity_drops.png}}
+\caption{Family-ID entity drops --- network-wide.}
 \label{fig:app_network_family_id_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_family_id_entity_drops.png}}
-\caption{static control family id entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/static_control_family_id_entity_drops.png}}
+\caption{Family-ID entity drops --- SC.}
 \label{fig:app_static_control_family_id_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_family_id_sybil.png}}
-\caption{static control family id sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/static_control_family_id_sybil.png}}
+\caption{Declared-family concentration --- SC.}
 \label{fig:app_static_control_family_id_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_family_id_entity_drops.png}}
-\caption{third party probe family id entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/third_party_probe_family_id_entity_drops.png}}
+\caption{Family-ID entity drops --- TP.}
 \label{fig:app_third_party_probe_family_id_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_family_id_sybil.png}}
-\caption{third party probe family id sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/third_party_probe_family_id_sybil.png}}
+\caption{Declared-family concentration --- TP.}
 \label{fig:app_third_party_probe_family_id_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_family_id_entity_drops.png}}
-\caption{tracked family id entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/tracked_family_id_entity_drops.png}}
+\caption{Family-ID entity drops --- tracked.}
 \label{fig:app_tracked_family_id_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_family_id_sybil.png}}
-\caption{tracked family id sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/family-id/tracked_family_id_sybil.png}}
+\caption{Declared-family concentration --- tracked.}
 \label{fig:app_tracked_family_id_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_ip_24_subnet_entity_drops.png}}
-\caption{ephemeral variable ip 24 subnet entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/ephemeral_variable_ip_24_subnet_entity_drops.png}}
+\caption{\texttt{/24}-subnet entity drops --- EV.}
 \label{fig:app_ephemeral_variable_ip_24_subnet_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_ip_24_subnet_sybil.png}}
-\caption{ephemeral variable ip 24 subnet sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/ephemeral_variable_ip_24_subnet_sybil.png}}
+\caption{\texttt{/24}-subnet concentration --- EV.}
 \label{fig:app_ephemeral_variable_ip_24_subnet_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_ip_entity_drops.png}}
-\caption{ephemeral variable ip entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/ephemeral_variable_ip_entity_drops.png}}
+\caption{Exact-IP entity drops --- EV.}
 \label{fig:app_ephemeral_variable_ip_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_ip_sybil.png}}
-\caption{ephemeral variable ip sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/ephemeral_variable_ip_sybil.png}}
+\caption{Exact-IP concentration --- EV.}
 \label{fig:app_ephemeral_variable_ip_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_ip_24_subnet_entity_drops.png}}
-\caption{network ip 24 subnet entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/network_ip_24_subnet_entity_drops.png}}
+\caption{\texttt{/24}-subnet entity drops --- network-wide.}
 \label{fig:app_network_ip_24_subnet_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_ip_entity_drops.png}}
-\caption{network ip entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/network_ip_entity_drops.png}}
+\caption{Exact-IP entity drops --- network-wide.}
 \label{fig:app_network_ip_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_ip_24_subnet_entity_drops.png}}
-\caption{static control ip 24 subnet entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/static_control_ip_24_subnet_entity_drops.png}}
+\caption{\texttt{/24}-subnet entity drops --- SC.}
 \label{fig:app_static_control_ip_24_subnet_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_ip_24_subnet_sybil.png}}
-\caption{static control ip 24 subnet sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/static_control_ip_24_subnet_sybil.png}}
+\caption{\texttt{/24}-subnet concentration --- SC.}
 \label{fig:app_static_control_ip_24_subnet_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_ip_entity_drops.png}}
-\caption{static control ip entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/static_control_ip_entity_drops.png}}
+\caption{Exact-IP entity drops --- SC.}
 \label{fig:app_static_control_ip_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_ip_sybil.png}}
-\caption{static control ip sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/static_control_ip_sybil.png}}
+\caption{Exact-IP concentration --- SC.}
 \label{fig:app_static_control_ip_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_ip_24_subnet_entity_drops.png}}
-\caption{third party probe ip 24 subnet entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/third_party_probe_ip_24_subnet_entity_drops.png}}
+\caption{\texttt{/24}-subnet entity drops --- TP.}
 \label{fig:app_third_party_probe_ip_24_subnet_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_ip_24_subnet_sybil.png}}
-\caption{third party probe ip 24 subnet sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/third_party_probe_ip_24_subnet_sybil.png}}
+\caption{\texttt{/24}-subnet concentration --- TP.}
 \label{fig:app_third_party_probe_ip_24_subnet_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_ip_entity_drops.png}}
-\caption{third party probe ip entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/third_party_probe_ip_entity_drops.png}}
+\caption{Exact-IP entity drops --- TP.}
 \label{fig:app_third_party_probe_ip_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_ip_sybil.png}}
-\caption{third party probe ip sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/third_party_probe_ip_sybil.png}}
+\caption{Exact-IP concentration --- TP.}
 \label{fig:app_third_party_probe_ip_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_ip_24_subnet_entity_drops.png}}
-\caption{tracked ip 24 subnet entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/tracked_ip_24_subnet_entity_drops.png}}
+\caption{\texttt{/24}-subnet entity drops --- tracked.}
 \label{fig:app_tracked_ip_24_subnet_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_ip_24_subnet_sybil.png}}
-\caption{tracked ip 24 subnet sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/tracked_ip_24_subnet_sybil.png}}
+\caption{\texttt{/24}-subnet concentration --- tracked.}
 \label{fig:app_tracked_ip_24_subnet_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_ip_entity_drops.png}}
-\caption{tracked ip entity drops.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/tracked_ip_entity_drops.png}}
+\caption{Exact-IP entity drops --- tracked.}
 \label{fig:app_tracked_ip_entity_drops}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_ip_sybil.png}}
-\caption{tracked ip sybil.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_sybil/tracked_ip_sybil.png}}
+\caption{Exact-IP concentration --- tracked.}
 \label{fig:app_tracked_ip_sybil}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_ip_changes.png}}
-\caption{ephemeral variable ip changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/ephemeral_variable_ip_changes.png}}
+\caption{Nickname IP-address mutation --- EV.}
 \label{fig:app_ephemeral_variable_ip_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_subnet_24_changes.png}}
-\caption{ephemeral variable subnet 24 changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/ephemeral_variable_subnet_24_changes.png}}
+\caption{Nickname \texttt{/24}-subnet mutation --- EV.}
 \label{fig:app_ephemeral_variable_subnet_24_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_ip_changes.png}}
-\caption{network ip changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/network_ip_changes.png}}
+\caption{Nickname IP-address mutation --- network-wide.}
 \label{fig:app_network_ip_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_subnet_24_changes.png}}
-\caption{network subnet 24 changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/network_subnet_24_changes.png}}
+\caption{Nickname \texttt{/24}-subnet mutation --- network-wide.}
 \label{fig:app_network_subnet_24_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_ip_changes.png}}
-\caption{static control ip changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/static_control_ip_changes.png}}
+\caption{Nickname IP-address mutation --- SC.}
 \label{fig:app_static_control_ip_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_subnet_24_changes.png}}
-\caption{static control subnet 24 changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/static_control_subnet_24_changes.png}}
+\caption{Nickname \texttt{/24}-subnet mutation --- SC.}
 \label{fig:app_static_control_subnet_24_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_ip_changes.png}}
-\caption{third party probe ip changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/third_party_probe_ip_changes.png}}
+\caption{Nickname IP-address mutation --- TP.}
 \label{fig:app_third_party_probe_ip_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_subnet_24_changes.png}}
-\caption{third party probe subnet 24 changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/third_party_probe_subnet_24_changes.png}}
+\caption{Nickname \texttt{/24}-subnet mutation --- TP.}
 \label{fig:app_third_party_probe_subnet_24_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_ip_changes.png}}
-\caption{tracked ip changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/tracked_ip_changes.png}}
+\caption{Nickname IP-address mutation --- tracked.}
 \label{fig:app_tracked_ip_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_subnet_24_changes.png}}
-\caption{tracked subnet 24 changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/ip_changes/tracked_subnet_24_changes.png}}
+\caption{Nickname \texttt{/24}-subnet mutation --- tracked.}
 \label{fig:app_tracked_subnet_24_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_fingerprint_changes.png}}
-\caption{ephemeral variable fingerprint changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/fp_changes/ephemeral_variable_fingerprint_changes.png}}
+\caption{Nickname fingerprint mutation --- EV.}
 \label{fig:app_ephemeral_variable_fingerprint_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_fingerprint_changes.png}}
-\caption{network fingerprint changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/fp_changes/network_fingerprint_changes.png}}
+\caption{Nickname fingerprint mutation --- network-wide.}
 \label{fig:app_network_fingerprint_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_fingerprint_changes.png}}
-\caption{static control fingerprint changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/fp_changes/static_control_fingerprint_changes.png}}
+\caption{Nickname fingerprint mutation --- SC.}
 \label{fig:app_static_control_fingerprint_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_fingerprint_changes.png}}
-\caption{third party probe fingerprint changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/fp_changes/third_party_probe_fingerprint_changes.png}}
+\caption{Nickname fingerprint mutation --- TP.}
 \label{fig:app_third_party_probe_fingerprint_changes}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_fingerprint_changes.png}}
-\caption{tracked fingerprint changes.}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/sybil/fp_changes/tracked_fingerprint_changes.png}}
+\caption{Nickname fingerprint mutation --- tracked.}
 \label{fig:app_tracked_fingerprint_changes}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_undeclared_families_no_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/ephemeral_variable_undeclared_families_no_ID.png}}
 \caption{ephemeral variable undeclared families no ID.}
 \label{fig:app_ephemeral_variable_undeclared_families_no_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/ephemeral_variable_undeclared_families_with_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/ephemeral_variable_undeclared_families_with_ID.png}}
 \caption{ephemeral variable undeclared families with ID.}
 \label{fig:app_ephemeral_variable_undeclared_families_with_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_undeclared_families_no_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/network_undeclared_families_no_ID.png}}
 \caption{network undeclared families no ID.}
 \label{fig:app_network_undeclared_families_no_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/network_undeclared_families_with_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/network_undeclared_families_with_ID.png}}
 \caption{network undeclared families with ID.}
 \label{fig:app_network_undeclared_families_with_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_undeclared_families_no_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/static_control_undeclared_families_no_ID.png}}
 \caption{static control undeclared families no ID.}
 \label{fig:app_static_control_undeclared_families_no_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/static_control_undeclared_families_with_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/static_control_undeclared_families_with_ID.png}}
 \caption{static control undeclared families with ID.}
 \label{fig:app_static_control_undeclared_families_with_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_undeclared_families_no_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/third_party_probe_undeclared_families_no_ID.png}}
 \caption{third party probe undeclared families no ID.}
 \label{fig:app_third_party_probe_undeclared_families_no_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/third_party_probe_undeclared_families_with_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/third_party_probe_undeclared_families_with_ID.png}}
 \caption{third party probe undeclared families with ID.}
 \label{fig:app_third_party_probe_undeclared_families_with_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_undeclared_families_no_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/tracked_undeclared_families_no_ID.png}}
 \caption{tracked undeclared families no ID.}
 \label{fig:app_tracked_undeclared_families_no_ID}
 \end{figure}
  
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\linewidth]{images/tracked_undeclared_families_with_ID.png}}
+\begin{figure}[H]
+\centerline{\includegraphics[width=\linewidth]{images/undeclared-families/tracked_undeclared_families_with_ID.png}}
 \caption{tracked undeclared families with ID.}
 \label{fig:app_tracked_undeclared_families_with_ID}
 \end{figure}
  
-\begin{table}[htbp]
-\caption{Ring-coverage percentages at 10{,}000-bucket resolution, pooled month-wide and daily-average, for the HSDir index and the onion index. ``---'' marks the network-wide onion-index cells, which do not apply.}
+\FloatBarrier
+\subsection{Hash-Ring Position}
+\FloatBarrier
+
+\begin{table}[H]
+\caption{Ring-coverage percentages at 10{,}000-bucket resolution.}
 \begin{center}
 \small
 \begin{tabular}{|l|r|r|r|r|}
@@ -2817,280 +2607,278 @@ TP & 28.98 & 1.45 & 4.20 & 0.26 \\
 \end{center}
 \end{table}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/tracked_distance_uniformity_ecdf.png}}
-\caption{Hsdir index: ring-index uniformity ECDF --- tracked.}
+\caption{HSDir index: uniformity ECDF --- tracked.}
 \label{fig:app_hsdir_index_tracked_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/ephemeral_variable_distance_uniformity_ecdf.png}}
-\caption{Hsdir index: ring-index uniformity ECDF --- EV.}
+\caption{HSDir index: uniformity ECDF --- EV.}
 \label{fig:app_hsdir_index_ephemeral_variable_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/static_control_distance_uniformity_ecdf.png}}
-\caption{Hsdir index: ring-index uniformity ECDF --- SC.}
+\caption{HSDir index: uniformity ECDF --- SC.}
 \label{fig:app_hsdir_index_static_control_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/service_types_distance_uniformity_ecdf.png}}
-\caption{Hsdir index: ring-index uniformity ECDF --- service-type comparison.}
+\caption{HSDir index: uniformity ECDF --- service-type comparison.}
 \label{fig:app_hsdir_index_service_types_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/tracked_churn_vs_distance_dispersion.png}}
-\caption{Hsdir index: daily churn vs.\ ring-position dispersion --- tracked.}
+\caption{HSDir index: churn vs.\ dispersion --- tracked.}
 \label{fig:app_hsdir_index_tracked_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/ephemeral_variable_churn_vs_distance_dispersion.png}}
-\caption{Hsdir index: daily churn vs.\ ring-position dispersion --- EV.}
+\caption{HSDir index: churn vs.\ dispersion --- EV.}
 \label{fig:app_hsdir_index_ephemeral_variable_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/static_control_churn_vs_distance_dispersion.png}}
-\caption{Hsdir index: daily churn vs.\ ring-position dispersion --- SC.}
+\caption{HSDir index: churn vs.\ dispersion --- SC.}
 \label{fig:app_hsdir_index_static_control_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/third_party_probe_churn_vs_distance_dispersion.png}}
-\caption{Hsdir index: daily churn vs.\ ring-position dispersion --- TP.}
+\caption{HSDir index: churn vs.\ dispersion --- TP.}
 \label{fig:app_hsdir_index_third_party_probe_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/hsdir_index/service_types_churn_vs_distance_dispersion.png}}
-\caption{Hsdir index: daily churn vs.\ ring-position dispersion --- service-type comparison.}
+\caption{HSDir index: churn vs.\ dispersion --- service types.}
 \label{fig:app_hsdir_index_service_types_churn_vs_distance_dispersion}
 \end{figure}
  
 % --- onion index ---
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/tracked_distance_uniformity_ecdf.png}}
-\caption{Onion index: ring-index uniformity ECDF --- tracked.}
+\caption{Onion index: uniformity ECDF --- tracked.}
 \label{fig:app_onion_index_tracked_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/ephemeral_variable_distance_uniformity_ecdf.png}}
-\caption{Onion index: ring-index uniformity ECDF --- EV.}
+\caption{Onion index: uniformity ECDF --- EV.}
 \label{fig:app_onion_index_ephemeral_variable_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/static_control_distance_uniformity_ecdf.png}}
-\caption{Onion index: ring-index uniformity ECDF --- SC.}
+\caption{Onion index: uniformity ECDF --- SC.}
 \label{fig:app_onion_index_static_control_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/third_party_probe_distance_uniformity_ecdf.png}}
-\caption{Onion index: ring-index uniformity ECDF --- TP.}
+\caption{Onion index: uniformity ECDF --- TP.}
 \label{fig:app_onion_index_third_party_probe_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/service_types_distance_uniformity_ecdf.png}}
-\caption{Onion index: ring-index uniformity ECDF --- service-type comparison.}
+\caption{Onion index: uniformity ECDF --- service-type comparison.}
 \label{fig:app_onion_index_service_types_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/tracked_churn_vs_distance_dispersion.png}}
-\caption{Onion index: daily churn vs.\ ring-position dispersion --- tracked.}
+\caption{Onion index: churn vs.\ dispersion --- tracked.}
 \label{fig:app_onion_index_tracked_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/ephemeral_variable_churn_vs_distance_dispersion.png}}
-\caption{Onion index: daily churn vs.\ ring-position dispersion --- EV.}
+\caption{Onion index: churn vs.\ dispersion --- EV.}
 \label{fig:app_onion_index_ephemeral_variable_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/static_control_churn_vs_distance_dispersion.png}}
-\caption{Onion index: daily churn vs.\ ring-position dispersion --- SC.}
+\caption{Onion index: churn vs.\ dispersion --- SC.}
 \label{fig:app_onion_index_static_control_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/third_party_probe_churn_vs_distance_dispersion.png}}
-\caption{Onion index: daily churn vs.\ ring-position dispersion --- TP.}
+\caption{Onion index: churn vs.\ dispersion --- TP.}
 \label{fig:app_onion_index_third_party_probe_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/service_types_churn_vs_distance_dispersion.png}}
-\caption{Onion index: daily churn vs.\ ring-position dispersion --- service-type comparison.}
+\caption{Onion index: churn vs.\ dispersion --- service types.}
 \label{fig:app_onion_index_service_types_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/tracked_onion_distance_uniformity.png}}
-\caption{Onion index: per-onion ring-distance dispersion --- tracked.}
+\caption{Onion index: per-onion distance dispersion --- tracked.}
 \label{fig:app_onion_index_tracked_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/ephemeral_variable_onion_distance_uniformity.png}}
-\caption{Onion index: per-onion ring-distance dispersion --- EV.}
+\caption{Onion index: per-onion distance dispersion --- EV.}
 \label{fig:app_onion_index_ephemeral_variable_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/static_control_onion_distance_uniformity.png}}
-\caption{Onion index: per-onion ring-distance dispersion --- SC.}
+\caption{Onion index: per-onion distance dispersion --- SC.}
 \label{fig:app_onion_index_static_control_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_index/third_party_probe_onion_distance_uniformity.png}}
-\caption{Onion index: per-onion ring-distance dispersion --- TP.}
+\caption{Onion index: per-onion distance dispersion --- TP.}
 \label{fig:app_onion_index_third_party_probe_onion_distance_uniformity}
 \end{figure}
  
 % --- onion-to-HSDir distance ---
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/tracked_distance_uniformity_ecdf.png}}
-\caption{Onion-to-hsdir distance: ring-index uniformity ECDF --- tracked.}
+\caption{Onion-to-HSDir distance: uniformity ECDF --- tracked.}
 \label{fig:app_onion_to_hsdir_tracked_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/ephemeral_variable_distance_uniformity_ecdf.png}}
-\caption{Onion-to-hsdir distance: ring-index uniformity ECDF --- EV.}
+\caption{Onion-to-HSDir distance: uniformity ECDF --- EV.}
 \label{fig:app_onion_to_hsdir_ephemeral_variable_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/static_control_distance_uniformity_ecdf.png}}
-\caption{Onion-to-hsdir distance: ring-index uniformity ECDF --- SC.}
+\caption{Onion-to-HSDir distance: uniformity ECDF --- SC.}
 \label{fig:app_onion_to_hsdir_static_control_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/third_party_probe_distance_uniformity_ecdf.png}}
-\caption{Onion-to-hsdir distance: ring-index uniformity ECDF --- TP.}
+\caption{Onion-to-HSDir distance: uniformity ECDF --- TP.}
 \label{fig:app_onion_to_hsdir_third_party_probe_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/service_types_distance_uniformity_ecdf.png}}
-\caption{Onion-to-hsdir distance: ring-index uniformity ECDF --- service-type comparison.}
+\caption{Onion-to-HSDir distance: uniformity ECDF --- service types.}
 \label{fig:app_onion_to_hsdir_service_types_distance_uniformity_ecdf}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/tracked_churn_vs_distance_dispersion.png}}
-\caption{Onion-to-hsdir distance: daily churn vs.\ ring-position dispersion --- tracked.}
+\caption{Onion-to-HSDir distance: churn vs.\ dispersion --- tracked.}
 \label{fig:app_onion_to_hsdir_tracked_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/ephemeral_variable_churn_vs_distance_dispersion.png}}
-\caption{Onion-to-hsdir distance: daily churn vs.\ ring-position dispersion --- EV.}
+\caption{Onion-to-HSDir distance: churn vs.\ dispersion --- EV.}
 \label{fig:app_onion_to_hsdir_ephemeral_variable_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/static_control_churn_vs_distance_dispersion.png}}
-\caption{Onion-to-hsdir distance: daily churn vs.\ ring-position dispersion --- SC.}
+\caption{Onion-to-HSDir distance: churn vs.\ dispersion --- SC.}
 \label{fig:app_onion_to_hsdir_static_control_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/third_party_probe_churn_vs_distance_dispersion.png}}
-\caption{Onion-to-hsdir distance: daily churn vs.\ ring-position dispersion --- TP.}
+\caption{Onion-to-HSDir distance: churn vs.\ dispersion --- TP.}
 \label{fig:app_onion_to_hsdir_third_party_probe_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/service_types_churn_vs_distance_dispersion.png}}
-\caption{Onion-to-hsdir distance: daily churn vs.\ ring-position dispersion --- service-type comparison.}
+\caption{Onion-to-HSDir distance: churn vs.\ dispersion --- service types.}
 \label{fig:app_onion_to_hsdir_service_types_churn_vs_distance_dispersion}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/tracked_onion_distance_uniformity.png}}
-\caption{Onion-to-hsdir distance: per-onion ring-distance dispersion --- tracked.}
+\caption{Onion-to-HSDir distance: per-onion distance dispersion --- tracked.}
 \label{fig:app_onion_to_hsdir_tracked_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/ephemeral_variable_onion_distance_uniformity.png}}
-\caption{Onion-to-hsdir distance: per-onion ring-distance dispersion --- EV.}
+\caption{Onion-to-HSDir distance: per-onion distance dispersion --- EV.}
 \label{fig:app_onion_to_hsdir_ephemeral_variable_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/static_control_onion_distance_uniformity.png}}
-\caption{Onion-to-hsdir distance: per-onion ring-distance dispersion --- SC.}
+\caption{Onion-to-HSDir distance: per-onion distance dispersion --- SC.}
 \label{fig:app_onion_to_hsdir_static_control_onion_distance_uniformity}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/uniformity/onion_to_hsdir/third_party_probe_onion_distance_uniformity.png}}
-\caption{Onion-to-hsdir distance: per-onion ring-distance dispersion --- TP.}
+\caption{Onion-to-HSDir distance: per-onion distance dispersion --- TP.}
 \label{fig:app_onion_to_hsdir_third_party_probe_onion_distance_uniformity}
 \end{figure}
 
-\begin{figure}[htbp]
+\FloatBarrier
+\subsection{Descriptor Hosting: Upload/Fetch Persistence}
+\FloatBarrier
+
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/ephemeral_variable_bpks_upload_fetch_persistance.png}}
 \caption{Per-descriptor upload and fetch counts --- EV.}
 \label{fig:app_uf_hist_ev}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/static_control_bpks_upload_fetch_persistance.png}}
-\caption{Per-descriptor upload and fetch counts --- SC. Note the second fetch cluster at the clipped upper bin, absent from EV.}
+\caption{Per-descriptor upload and fetch counts --- SC.}
 \label{fig:app_uf_hist_sc}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/third_party_probe_bpks_upload_fetch_persistance.png}}
-\caption{Per-descriptor upload and fetch counts --- TP. No uploads occur; only fetches are recorded.}
+\caption{Per-descriptor upload and fetch counts --- TP.}
 \label{fig:app_uf_hist_tp}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/tracked_bpks_upload_fetch_hour_persistance.png}}
 \caption{Distinct-hourly-bucket upload and fetch persistence --- tracked.}
 \label{fig:app_uf_hour_tracked}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/ephemeral_variable_bpks_upload_fetch_hour_persistance.png}}
 \caption{Distinct-hourly-bucket upload and fetch persistence --- EV.}
 \label{fig:app_uf_hour_ev}
 \end{figure}
-\clearpage
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/static_control_bpks_upload_fetch_hour_persistance.png}}
 \caption{Distinct-hourly-bucket upload and fetch persistence --- SC.}
 \label{fig:app_uf_hour_sc}
 \end{figure}
  
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centerline{\includegraphics[width=\linewidth]{images/bpks/uf_persistance/third_party_probe_bpks_upload_fetch_hour_persistance.png}}
 \caption{Distinct-hourly-bucket upload and fetch persistence --- TP.}
 \label{fig:app_uf_hour_tp}
 \end{figure}
-\clearpage
 
-\begin{table}[htbp]
-\caption{Per-descriptor totals: descriptor count, failed-upload events and affected descriptors, and maximum uploads and fetches per descriptor.}
+\begin{table}[H]
+\caption{Per-descriptor upload/fetch totals --- tracked and by service type.}
 \begin{center}
 \small
 \begin{tabular}{|l|r|r|r|r|r|}
@@ -3109,10 +2897,9 @@ TP & 413 & 0 & 0 & 0 & 55 \\
 \label{tab:bpk_totals}
 \end{center}
 \end{table}
-\clearpage
  
-\begin{table}[htbp]
-\caption{Distinct-hourly-bucket persistence: maximum number of distinct hourly snapshots in which a descriptor was uploaded, and in which it was fetched.}
+\begin{table}[H]
+\caption{Distinct-hourly-bucket upload/fetch persistence --- tracked and by service type.}
 \begin{center}\small
 \begin{tabular}{|l|r|r|}
 \hline
@@ -3129,10 +2916,9 @@ TP & 0 & 19 \\
 \end{tabular}
 \label{tab:bpk_hours}
 \end{center}\end{table}
-\clearpage
  
-\begin{table}[htbp]
-\caption{Silent-failure classification: descriptors uploaded but never fetched, and fetched but never uploaded, as counts and as a percentage of each population.}
+\begin{table}[H]
+\caption{Silent-failure descriptor classification --- tracked and by service type.}
 \begin{center}\small
 \begin{tabular}{|l|r|r|r|r|}
 \hline
@@ -3151,7 +2937,6 @@ TP & 0 & 0.00 & 396 & 95.88 \\
 \end{tabular}
 \label{tab:bpk_silent}
 \end{center}\end{table}
-\clearpage
 
 \section{DECLARATION OF USE OF GENERATIVE ARTIFICIAL INTELLIGENCE (AI)}
 \label{app:ai_use}
