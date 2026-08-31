@@ -236,7 +236,7 @@ def _chronological_days(df):
     return sorted(days, key=day_key)
 
 
-def _plot_sybil_series(df, group_col, top_group_ids, output_path, title, metric_label):
+def _plot_sybil_series(df, group_col, top_group_ids, output_path, metric_label):
     """
     Save one figure with, per entry in `top_group_ids`, a solid line for its
     absolute per-day unique-fingerprint count (left axis) and a dashed line
@@ -282,9 +282,8 @@ def _plot_sybil_series(df, group_col, top_group_ids, output_path, title, metric_
                   label=f"{legend_id} (share)")
 
     ax1.set_xlabel("Day")
-    ax1.set_ylabel(f"Unique fingerprint count — solid  ({metric_label})")
-    ax2.set_ylabel("Network share — dashed")
-    ax1.set_title(title)
+    ax1.set_ylabel(f"Unique count, solid ({metric_label})")
+    ax2.set_ylabel("Network share, dashed")
     ax1.tick_params(axis='x', rotation=45)
 
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -333,22 +332,18 @@ def _sybil_top5_report_and_plot(df, group_col, label, output_path, metric_label=
 
     _plot_sybil_series(
         df, group_col, list(top_groups.index), output_path,
-        title=f"{label} — {metric_label} sybil distribution",
         metric_label=metric_label,
     )
 
 
 def family_id_sybil_distributions(df, context_label):
     """
-    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
-    shape), rank declared_family_id groups by unique-fingerprint count,
-    print the top 5 with their overall network share, and save a per-day
-    count/share figure to
+    Rank declared_family_id groups by unique-fingerprint count for `df`
+    (network-wide or tracked), print the top 5 with their network share, and
+    save a per-day count/share figure to
     analysis-results/sybil/family-id/{context_label}_family_id_sybil.png.
-
-    When context_label == "tracked", additionally repeats the same
-    analysis once per distinct service_type, saved to
-    analysis-results/sybil/family-id/{service_type_lower}_family_id_sybil.png.
+    For the tracked context, the analysis is repeated once per service_type,
+    saved as {service_type_lower}_family_id_sybil.png.
     """
     base_dir = os.path.join("analysis-results", "sybil", "family-id")
 
@@ -387,13 +382,11 @@ def _to_24_subnet(ip_str):
 
 def ip_sybil_distributions(df, context_label):
     """
-    Deliverable B. Same structure as family_id_sybil_distributions, but
-    groups by IP-based identity instead of declared_family_id, in two
-    variants: exact ip_address, and the derived /24 subnet. Saved under
+    Like family_id_sybil_distributions, but groups by IP identity in two
+    variants: exact ip_address and derived /24 subnet. Saved under
     analysis-results/sybil/ip_sybil/ as
-    {context_label}_ip_sybil.png / {context_label}_ip_24_subnet_sybil.png
-    (and, for context_label == "tracked", additionally per service_type as
-    {service_type_lower}_ip_sybil.png / {service_type_lower}_ip_24_subnet_sybil.png).
+    {context_label}_ip_sybil.png / {context_label}_ip_24_subnet_sybil.png,
+    with per-service_type variants for the tracked context.
     """
     base_dir = os.path.join("analysis-results", "sybil", "ip_sybil")
 
@@ -423,35 +416,19 @@ def ip_sybil_distributions(df, context_label):
 
 def service_type_overlap_diagnostic(df, context_label):
     """
-    Diagnostic: explains why per-service_type unique-fingerprint counts
-    (as printed inside family_id_sybil_distributions / ip_sybil_distributions
-    for the tracked DataFrame) don't sum to the overall tracked
-    unique-fingerprint count.
+    Diagnostic explaining why per-service_type unique-fingerprint counts
+    don't sum to the overall tracked count: each tracked row is a
+    (relay, mapped_onion) pairing, so one relay's fingerprint can appear
+    under several service_types and is counted once per subset it touches but
+    once overall, making the subsets overlap.
 
-    Each row in the tracked data is a (relay, mapped_onion) pairing, not
-    one row per physical relay -- so a single relay's fingerprint can
-    appear under more than one service_type if it acts as HSDir for
-    onions in different service_type buckets (at the same time, or at
-    different points across the tracked period). That relay is correctly
-    counted once in EACH per-service_type subset it touches, but only
-    once in the overall count -- so subsets overlap and their counts are
-    not additive. This function quantifies that overlap directly:
-
-    - groups by `fingerprint` and collects the *set* of distinct
-      service_type values each one was ever seen under in `df`
-    - reports how many relays touch only one service_type vs. 2+ 
-    - breaks that down by the exact combination (e.g.
-      "EPHEMERAL_VARIABLE + STATIC_CONTROL": N relays)
-
-    Only meaningful where `service_type` exists (the tracked DataFrame --
-    network-wide data has no such column, so it's skipped there). Prints
-    the summary and combination breakdown to the terminal, and saves the
-    full breakdown as a CSV so exact figures can be cited in the thesis
-    ("N relays / N% of tracked relays served more than one service_type
-    over the study period") at
+    Groups by fingerprint, collects the set of service_types each was seen
+    under, reports how many relays touch one vs 2+ types, and breaks that
+    down by exact combination. Only meaningful where service_type exists
+    (skipped for network-wide data). Prints the summary and saves the full
+    breakdown to
     analysis-results/sybil/{context_label}_service_type_overlap.csv.
-    Returns the breakdown as a DataFrame (None if service_type isn't
-    present).
+    Returns the breakdown DataFrame (None if service_type is absent).
     """
 
     df = df[df["consecutive_hourly_absences"].isna() | (df["consecutive_hourly_absences"] <= 1)]
@@ -594,35 +571,23 @@ def _print_top5_drop_counts(drop_df, group_col, label, metric_label):
             print(f"    {group_id}: {drop_name}, {count} snapshot(s)")
 
 
-def _plot_entity_drops_series(df, drop_df, output_path, title):
+def _plot_entity_drops_series(df, drop_df, output_path):
     """
-    Save one figure with 4 series across the chronological (date, hour)
-    snapshot sequence: absolute partial-drop count (solid blue), absolute
-    total-drop count (solid red), partial-drop network share (dashed
-    blue), total-drop network share (dashed red).
+    Save one figure with 4 series over the chronological (date, hour)
+    sequence: partial-drop count (solid blue), total-drop count (solid red),
+    partial-drop network share (dashed blue), total-drop network share
+    (dashed red).
 
-    "Count" is the number of distinct groups (families / IPs / /24
-    subnets) that registered that drop type in that snapshot -- e.g. if
-    2 families each had >=1 active and >=1 inactive member that snapshot,
-    the partial-drop count for that snapshot is 2, regardless of how many
-    nodes those 2 families control. This is a count of drop *events*, not
-    a sum of affected nodes.
-
-    "Share" is a separate, complementary signal: it divides the sum of
-    total_members (active + inactive) across all groups with that drop
-    type by the whole `df`'s unique-fingerprint count for that same
-    snapshot -- i.e. what fraction of the network's actual node
-    population is sitting inside a partially/totally dropped group,
-    which can move independently of how many groups are affected (a
-    single large family dropping moves this more than several tiny ones).
-    Same "share of the total observed network" convention used by the
-    sybil-distribution functions.
+    "Count" is the number of distinct groups (families / IPs / /24 subnets)
+    registering that drop type in a snapshot -- a count of drop events, not a
+    sum of affected nodes. "Share" divides the summed total_members of all
+    groups with that drop type by the snapshot's unique-fingerprint count, so
+    it tracks what fraction of the node population sits in a dropped group and
+    can move independently of the event count.
 
     X-axis ticks show one "Day N" label per day (at that day's first
-    snapshot) rather than one per (date, hour) snapshot, so hour-to-hour
-    spikes stay visible as individual plotted points without the axis
-    turning into an unreadable wall of labels. A day with only a single
-    snapshot still plots fine as one point.
+    snapshot), keeping hour-to-hour spikes visible without an unreadable wall
+    of labels.
     """
     snapshots = _chronological_snapshots(df)
     snapshot_totals = df.groupby(['date', 'hour'])['fingerprint'].nunique()
@@ -677,9 +642,8 @@ def _plot_entity_drops_series(df, drop_df, output_path, title):
     ax1.set_xticklabels(list(day_first_index.keys()), rotation=45)
 
     ax1.set_xlabel("Day")
-    ax1.set_ylabel("Groups with a drop (count) — solid")
-    ax2.set_ylabel("Network share — dashed")
-    ax1.set_title(title)
+    ax1.set_ylabel("Groups with a drop, solid")
+    ax2.set_ylabel("Network share, dashed")
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
@@ -712,13 +676,12 @@ def _entity_drops_report_and_plot(df, group_col, label, output_path, metric_labe
 
     _plot_entity_drops_series(
         df, drop_df, output_path,
-        title=f"{label} — {metric_label} entity drops",
     )
 
 
 def family_id_entity_drops_distributions(df, context_label):
     """
-    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
+    For `df` (network-wide or tracked, post-validate_sort_data
     shape), classifies each declared_family_id group's per-snapshot status
     as a partial or total drop, prints the top-5-by-snapshot-count for
     each drop type, and saves the 4-series time plot to
@@ -751,7 +714,7 @@ def family_id_entity_drops_distributions(df, context_label):
 
 def ip_entity_drops_distributions(df, context_label):
     """
-    Deliverable B (IP-based equivalent). Same structure as
+    IP-based equivalent, same structure as
     family_id_entity_drops_distributions, but groups by IP-based identity
     instead of declared_family_id, in two variants: exact ip_address, and
     the derived /24 subnet (via the same _to_24_subnet helper used by
@@ -848,7 +811,7 @@ def _mean_fraction(fractions):
     return (sum(fractions) / len(fractions)) if fractions else 0.0
 
 
-def _plot_diverging_stability_bar(days, active_fractions, inactive_fractions, output_path, title):
+def _plot_diverging_stability_bar(days, active_fractions, inactive_fractions, output_path):
     """
     Diverging bar chart: one blue bar (active_fraction, positive) and one
     red bar (inactive_fraction, plotted as its negative) per day, against
@@ -865,8 +828,7 @@ def _plot_diverging_stability_bar(days, active_fractions, inactive_fractions, ou
     ax.set_xticks(x)
     ax.set_xticklabels(days, rotation=45)
     ax.set_xlabel("Day")
-    ax.set_ylabel("Fraction of nodes (active positive / inactive negative)")
-    ax.set_title(title)
+    ax.set_ylabel("Fraction of nodes (active / inactive)")
     ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.02, 1))
 
     fig.tight_layout()
@@ -876,7 +838,7 @@ def _plot_diverging_stability_bar(days, active_fractions, inactive_fractions, ou
     print(f"    --> Saved plot: {output_path}")
 
 
-def _plot_diverging_stability_grouped_bar(days, service_type_fractions, output_path, title):
+def _plot_diverging_stability_grouped_bar(days, service_type_fractions, output_path):
     """
     Combined diverging bar chart for multiple service types on one figure:
     grouped/clustered bars per day, one blue/red bar pair per service
@@ -911,8 +873,7 @@ def _plot_diverging_stability_grouped_bar(days, service_type_fractions, output_p
     ax.set_xticks(list(x))
     ax.set_xticklabels(days, rotation=45)
     ax.set_xlabel("Day")
-    ax.set_ylabel("Fraction of nodes (active positive / inactive negative)")
-    ax.set_title(title)
+    ax.set_ylabel("Fraction of nodes (active / inactive)")
     ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.02, 1))
 
     fig.tight_layout()
@@ -936,8 +897,8 @@ def daily_rotated_nodes_stability_distributions(df, context_label):
     1. The general (whole-DataFrame) count above dedupes on the
        (fingerprint, service_type) pair rather than fingerprint alone, so
        a node tracked under N distinct service_types that day contributes
-       N times -- per the spec's explicit overlap rule for this general
-       count. rotated_network has no such overlap (there's nothing to
+       N times, under the overlap rule for this general count.
+       rotated_network has no such overlap (there's nothing to
        dedupe by), so it dedupes on fingerprint alone.
     2. Additionally repeats the per-day active/inactive fraction
        computation once per distinct service_type (each subset already
@@ -973,7 +934,6 @@ def daily_rotated_nodes_stability_distributions(df, context_label):
     _plot_diverging_stability_bar(
         days, active_fractions, inactive_fractions,
         os.path.join(base_dir, f"{context_label}_daily_rotated_node_stability.png"),
-        title=f"{context_label} — daily rotated node stability",
     )
 
     if context_label == "rotated_tracked" and 'service_type' in df.columns:
@@ -1000,7 +960,6 @@ def daily_rotated_nodes_stability_distributions(df, context_label):
             _plot_diverging_stability_grouped_bar(
                 days, service_type_fractions,
                 os.path.join(base_dir, "daily_rotated_service_type_node_stability.png"),
-                title=f"{context_label} — daily rotated node stability by service type",
             )
 
 
@@ -1008,32 +967,15 @@ def daily_rotated_nodes_stability_distributions(df, context_label):
 # Ring-position uniformity analysis (unified: onion->HSDir distance,
 # HSDir ring index, onion ring index)
 #
-# This one function replaces three near-duplicate v5 source functions
-# (compute_onion_to_hsdir_uniformity, compute_hsdir_index_uniformity, and a
-# never-written onion-index variant). It computes the same per-day
-# uniformity/churn statistic family for three different ring-position
-# metrics, each scoped to the context_labels where its source column exists,
-# built on the vectorized groupby/pivot/diff approach specified in
-# reimplement_onion_hsdir_uniformity.md rather than the original nested
-# day x onion x hour Python loops.
+# Computes the same per-day uniformity/churn statistic family for three
+# ring-position metrics, each scoped to the context_labels where its source
+# column exists, via a vectorized groupby/pivot/diff approach.
 #
-# Resolved design decisions (all per the prompt's defaults, flagged in the
-# reply to the user):
-#   * active convention: STRICT — only status == "ACTIVE_IN_RING" is active,
-#     matching every other function in this file (the v5 source also treated
-#     a missing/"None" status as active; we don't).
-#   * output root: hyphenated "analysis-results/" to match the rest of the
-#     file (the task doc's "analysis_results/" underscore is treated as a typo).
-#   * ECDF filename generalized to {context_label}_distance_uniformity_ecdf.png.
-#   * per-service-type dispersion breakdown kept at the literally-specified
-#     {service_type_lower}_distance_uniformity_ecdf.png even though its content
-#     is the dispersion plot, not an ECDF (flagged as probably-unintended).
-#   * combined churn-scatter overlay named
-#     service_types_churn_vs_distance_dispersion.png (the doc's repeated
-#     "service_types_distance_uniformity_ecdf" there is treated as a copy/paste slip).
-#   * EPHEMERAL_VARIABLE dispersion plot: per-day pooled mean +/- std across
-#     that day's ephemeral onions, since each ephemeral onion lives one day
-#     and a per-onion-across-days line degenerates to a single point.
+# Conventions: only status == "ACTIVE_IN_RING" counts as active; output root
+# is "analysis-results/". The EPHEMERAL_VARIABLE dispersion plot uses a
+# per-day pooled mean +/- std across that day's ephemeral onions, since each
+# ephemeral onion lives one day and a per-onion-across-days line would
+# degenerate to a single point.
 # ---------------------------------------------------------------------------
 
 TWO_POW_256 = 2 ** 256
@@ -1104,10 +1046,8 @@ def _parse_hex_to_unit(series):
 
 def _hour_to_float(series):
     """
-    Shared hour-parsing helper (factored out of the two v5 functions, which
-    each re-derived it). "HH:MM" -> HH + MM/60; a bare number -> that number;
-    anything unparseable -> 0.0. Vectorized, and per-value safe rather than
-    sniffing the dtype off row 0 as the v5 code did.
+    Shared hour-parsing helper. "HH:MM" -> HH + MM/60; a bare number -> that
+    number; anything unparseable -> 0.0. Vectorized and per-value safe.
     """
     s = series.astype(str)
     has_colon = s.str.contains(":", na=False)
@@ -1204,8 +1144,7 @@ def _prepare_uniformity_frame(df_slice, metric, dedupe_on_service_type=False):
 
 def _vectorized_churn(df, entity_key_col="_entity_key"):
     """
-    Vectorized per-(date, entity) churn, validated to reproduce the v5
-    nested-loop new/disappeared semantics exactly:
+    Vectorized per-(date, entity) churn with new/disappeared semantics:
       - "new"        = the first hour a fingerprint is seen active that day
                        for that entity (not recounted on later reappearance);
                        every active fp in the first observed hour is new.
@@ -1326,12 +1265,11 @@ def _plot_ecdf(ax, values, label, color):
     ax.plot(vals, ecdf, color=color, linewidth=2.0, label=label)
 
 
-def _save_ecdf_figure(dedup_values, output_path, title, value_label):
+def _save_ecdf_figure(dedup_values, output_path, value_label):
     """Single-series ECDF vs ideal U(0,1)."""
     fig, ax = plt.subplots(figsize=(10, 6))
     _plot_ecdf(ax, dedup_values, "Empirical CDF (ECDF)", "#2ca02c")
     ax.plot([0, 1], [0, 1], color="gray", linestyle="--", linewidth=1.5, label="Ideal Uniform U(0,1)")
-    ax.set_title(title)
     ax.set_xlabel(value_label)
     ax.set_ylabel("Cumulative Probability")
     ax.set_xlim(0, 1)
@@ -1344,13 +1282,12 @@ def _save_ecdf_figure(dedup_values, output_path, title, value_label):
     print(f"    --> Saved plot: {output_path}")
 
 
-def _save_ecdf_overlay_figure(series_values, output_path, title, value_label):
+def _save_ecdf_overlay_figure(series_values, output_path, value_label):
     """Overlay one ECDF per key in `series_values` = {label: values}."""
     fig, ax = plt.subplots(figsize=(10, 6))
     for i, (lbl, vals) in enumerate(series_values.items()):
         _plot_ecdf(ax, vals, str(lbl), _series_color(lbl, i))
     ax.plot([0, 1], [0, 1], color="gray", linestyle="--", linewidth=1.5, label="Ideal Uniform U(0,1)")
-    ax.set_title(title)
     ax.set_xlabel(value_label)
     ax.set_ylabel("Cumulative Probability")
     ax.set_xlim(0, 1)
@@ -1379,7 +1316,7 @@ def _series_color(label, index):
     return _SERVICE_TYPE_COLORS.get(str(label), _FALLBACK_COLORS[index % len(_FALLBACK_COLORS)])
 
 
-def _save_churn_scatter_figure(tables_by_label, output_path, title):
+def _save_churn_scatter_figure(tables_by_label, output_path):
     """
     Churn-vs-dispersion scatter. `tables_by_label` = {label: uniformity_table};
     each contributes its (Total Churn, std_value) points in one contrasting
@@ -1399,8 +1336,7 @@ def _save_churn_scatter_figure(tables_by_label, output_path, title):
             xs = np.linspace(x.min(), x.max(), 100)
             ax.plot(xs, p(xs), color=color, linestyle="--", linewidth=1.8,
                     label=f"{lbl} trend (slope={z[0]:.4f})")
-    ax.set_title(title)
-    ax.set_xlabel("Daily Total Churn (New + Disappeared HSDirs)")
+    ax.set_xlabel("Daily total churn")
     ax.set_ylabel(r"Value Std Dev ($\sigma$)")
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
@@ -1410,12 +1346,12 @@ def _save_churn_scatter_figure(tables_by_label, output_path, title):
     print(f"    --> Saved plot: {output_path}")
 
 
-def _save_dispersion_figure(df, entity_key_col, output_path, title, value_label,
+def _save_dispersion_figure(df, entity_key_col, output_path, value_label,
                             by_hour=False):
     """
-    Per-onion dispersion plot, v5 "_onion_distance_uniformity" style: for each
-    onion, a mean line plus a shaded +/-1 std band (mean line in the Dark2
-    palette, band in YlOrRd). One line per onion.
+    Per-onion dispersion plot: for each onion, a mean line plus a shaded
+    +/-1 std band (mean line in the Dark2 palette, band in YlOrRd), one line
+    per onion.
 
     `df` is the prepared per-row frame (has date/hour/value/_entity_key). The
     x-axis is built explicitly from an ordered list of time slots and every
@@ -1475,7 +1411,6 @@ def _save_dispersion_figure(df, entity_key_col, output_path, title, value_label,
 
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lab, rotation=45)
-    ax.set_title(title)
     ax.set_xlabel("Observation Timeline")
     ax.set_ylabel(value_label)
     ax.set_ylim(-0.05, 1.05)
@@ -1495,7 +1430,6 @@ def _run_one_metric(df, metric_key, context_label):
     out_dir = metric["output_dir"]
     entity = metric["entity"]
     value_label = metric["value_label"]
-    metric_title = metric["metric_title"]
 
     # --- General case (any valid context) ---
     prepared = _prepare_uniformity_frame(df, metric, dedupe_on_service_type=False)
@@ -1514,15 +1448,13 @@ def _run_one_metric(df, metric_key, context_label):
     _save_ecdf_figure(
         dedup_vals,
         os.path.join(out_dir, f"{context_label}_distance_uniformity_ecdf.png"),
-        title=f"ECDF of {metric_title} vs Uniformity — {context_label}",
         value_label=value_label,
     )
     _save_churn_scatter_figure(
         {context_label: table},
         os.path.join(out_dir, f"{context_label}_churn_vs_distance_dispersion.png"),
-        title=f"{metric_title}: daily churn vs dispersion — {context_label}",
     )
-    # General per-onion dispersion plot (v5 "_onion_distance_uniformity" style):
+    # General per-onion dispersion plot:
     # one mean±std line per onion across days. Only meaningful for the two
     # onion-indexed metrics (entity == mapped_onion); the HSDir-ring-index
     # metric groups by fingerprint, for which a "per-onion" dispersion plot
@@ -1531,8 +1463,6 @@ def _run_one_metric(df, metric_key, context_label):
         _save_dispersion_figure(
             prepared, "_entity_key",
             os.path.join(out_dir, f"{context_label}_onion_distance_uniformity.png"),
-            title=(f"Tor v3 Daily HSDir {metric_title} Uniformity & Dispersion per Onion Service\n"
-                   f"Segment: {context_label.replace('_', ' ').title()}"),
             value_label=value_label,
         )
 
@@ -1570,7 +1500,6 @@ def _run_one_metric(df, metric_key, context_label):
             _save_ecdf_figure(
                 st_vals,
                 os.path.join(out_dir, f"{st_lower}_distance_uniformity_ecdf.png"),
-                title=f"ECDF of {metric_title} vs Uniformity — {st}",
                 value_label=value_label,
             )
 
@@ -1579,7 +1508,6 @@ def _run_one_metric(df, metric_key, context_label):
             _save_churn_scatter_figure(
                 {st: sub_table},
                 os.path.join(out_dir, f"{st_lower}_churn_vs_distance_dispersion.png"),
-                title=f"{metric_title}: churn vs dispersion — {st}",
             )
 
             # Per-service-type per-onion dispersion breakdown (onion-indexed
@@ -1592,8 +1520,6 @@ def _run_one_metric(df, metric_key, context_label):
                 _save_dispersion_figure(
                     sub_prepared, "_entity_key",
                     os.path.join(out_dir, f"{st_lower}_onion_distance_uniformity.png"),
-                    title=(f"Tor v3 Daily HSDir {metric_title} Uniformity & Dispersion per Onion Service\n"
-                           f"Segment: {context_label.replace('_', ' ').title()} {st.replace('_', ' ').title()}"),
                     value_label=value_label,
                     by_hour=(st == "EPHEMERAL_VARIABLE"),
                 )
@@ -1602,14 +1528,12 @@ def _run_one_metric(df, metric_key, context_label):
             _save_ecdf_overlay_figure(
                 overlay_ecdf_series,
                 os.path.join(out_dir, "service_types_distance_uniformity_ecdf.png"),
-                title=f"{metric_title}: ECDF by service type — {context_label}",
                 value_label=value_label,
             )
         if overlay_scatter_tables:
             _save_churn_scatter_figure(
                 overlay_scatter_tables,
                 os.path.join(out_dir, "service_types_churn_vs_distance_dispersion.png"),
-                title=f"{metric_title}: churn vs dispersion by service type — {context_label}",
             )
 
     return table
@@ -1617,18 +1541,16 @@ def _run_one_metric(df, metric_key, context_label):
 
 def hrt_uniformity_distributions(df, context_label):
     """
-    Unified ring-position uniformity + churn analysis, replacing the v5
-    compute_onion_to_hsdir_uniformity / compute_hsdir_index_uniformity pair
-    (and the never-written onion-index variant) with one vectorized function.
+    Unified ring-position uniformity and churn analysis over every ring-position
+    metric valid in `context_label`.
 
-    Computes, for each ring-position metric valid in `context_label`, the
-    per-day uniformity statistic family (mean/std/min/max/range + KS-based
-    uniformity score against U(0,1)) and daily HSDir churn (new/disappeared),
-    then saves an ECDF plot and a churn-vs-dispersion scatter. For the
-    "tracked" context it additionally saves service-type ECDF/scatter
-    overlays and, for the onion-indexed metrics, per-service-type per-onion
-    dispersion breakdowns (with the special EPHEMERAL_VARIABLE daily-pooled
-    rendering).
+    Computes, per metric, the per-day uniformity statistic family
+    (mean/std/min/max/range + KS-based uniformity score against U(0,1)) and
+    daily HSDir churn (new/disappeared), then saves an ECDF plot and a
+    churn-vs-dispersion scatter. For the "tracked" context it also saves
+    service-type ECDF/scatter overlays and, for the onion-indexed metrics,
+    per-service-type per-onion dispersion breakdowns (with the special
+    EPHEMERAL_VARIABLE daily-pooled rendering).
 
     Metric -> (source column, per-day entity, valid contexts, output dir):
       * onion_to_hsdir : hsdir_to_onion_ring_distance (fallback ...position),
@@ -1781,7 +1703,7 @@ def _dedup_prepared(prepared):
     return prepared.drop_duplicates(subset=["date", "_entity_key", "fingerprint", "hour"])
 
 
-def _plot_coverage_diverging(days, coverage_fractions, output_path, title):
+def _plot_coverage_diverging(days, coverage_fractions, output_path):
     """
     Single-series diverging coverage plot: coverage as a positive solid blue
     line, uncovered share (1 - coverage) as a negative solid red line, per day.
@@ -1796,9 +1718,8 @@ def _plot_coverage_diverging(days, coverage_fractions, output_path, title):
     ax.set_xticks(x)
     ax.set_xticklabels(days, rotation=45)
     ax.set_xlabel("Day")
-    ax.set_ylabel(f"Fraction of {HRT_COVERAGE_BUCKETS} ring buckets\n(covered positive / uncovered negative)")
+    ax.set_ylabel("Ring-bucket fraction (covered / uncovered)")
     ax.set_ylim(-1.05, 1.05)
-    ax.set_title(title)
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -1807,7 +1728,7 @@ def _plot_coverage_diverging(days, coverage_fractions, output_path, title):
     print(f"    --> Saved plot: {output_path}")
 
 
-def _plot_coverage_overlay(days, series_fractions, output_path, title, show_legend=True):
+def _plot_coverage_overlay(days, series_fractions, output_path, show_legend=True):
     """
     Combined diverging coverage plot for multiple labeled series (service types
     or onions). `series_fractions` = {label: coverage_fraction_list}. Each
@@ -1837,9 +1758,8 @@ def _plot_coverage_overlay(days, series_fractions, output_path, title, show_lege
     ax.set_xticks(x)
     ax.set_xticklabels(days, rotation=45)
     ax.set_xlabel("Day")
-    ax.set_ylabel(f"Fraction of {HRT_COVERAGE_BUCKETS} ring buckets\n(covered positive / uncovered negative)")
+    ax.set_ylabel("Ring-bucket fraction (covered / uncovered)")
     ax.set_ylim(-1.05, 1.05)
-    ax.set_title(title)
     if show_legend:
         ax.legend(loc="upper right", fontsize=7, ncol=2)
     fig.tight_layout()
@@ -1878,8 +1798,6 @@ def _run_one_coverage_metric(df, metric_key, context_label):
     _plot_coverage_diverging(
         days, daily,
         os.path.join(out_dir, f"{context_label}_daily_hrt_coverage.png"),
-        title=(f"{metric_title}: daily DHT ring coverage — {context_label}\n"
-               f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
     )
 
     # --- Tracked-only: per-service-type (steps 5-6) ---
@@ -1915,8 +1833,6 @@ def _run_one_coverage_metric(df, metric_key, context_label):
             _plot_coverage_overlay(
                 days, overlay,
                 os.path.join(out_dir, "service_types_daily_hrt_coverage.png"),
-                title=(f"{metric_title}: daily DHT ring coverage by service type — {context_label}\n"
-                       f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
             )
 
         # Per-service-type, per-onion breakdown (step 6) — hsdir_index only.
@@ -1950,8 +1866,6 @@ def _run_one_coverage_metric(df, metric_key, context_label):
                 _plot_coverage_overlay(
                     days, onion_series,
                     os.path.join(out_dir, f"{st.lower()}_onion_daily_hrt_coverage.png"),
-                    title=(f"{metric_title}: per-onion HSDir ring coverage — {st}\n"
-                           f"(coverage at {HRT_COVERAGE_BUCKETS}-bucket resolution)"),
                     show_legend=False,
                 )
 
@@ -2003,34 +1917,27 @@ def hrt_index_coverage_distributions(df, context_label):
 
 def _stripped_flag_counts(df, dedupe_on_service_type=False):
     """
-    Per-(date, hour) count of distinct entities observed with
-    status == "STRIPPED_HSDIR_FLAG" at consecutive_hourly_absences == 1 that
-    snapshot -- a diagnostic breakdown of "just lost its HSDir flag", not a
-    fourth churn category disjoint from the other three (see
-    _churn_state_machine's docstring for why it overlaps disappeared).
+    Per-(date, hour) count of distinct entities with
+    status == "STRIPPED_HSDIR_FLAG" at consecutive_hourly_absences == 1 --
+    a diagnostic breakdown of "just lost its HSDir flag", overlapping the
+    disappeared churn category rather than being disjoint from it.
 
-    Filter (confirmed, resolving a gap in the task doc's literal filter
-    text): (consecutive_hourly_absences.isna() |
+    Filter: (consecutive_hourly_absences.isna() |
     (consecutive_hourly_absences == 1)) AND status == "STRIPPED_HSDIR_FLAG".
-    The status condition is required even though the literal "== 1" filter
-    text alone doesn't encode it -- without it, any node with exactly one
-    recorded absence for an unrelated reason (e.g. OFFLINE_CHURN) would be
-    misread as a stripped-flag event. This is a DIFFERENT strictness level
-    than _churn_state_machine's own "== 0" presence filter -- both are
-    needed simultaneously (0 absences to detect who's actually present;
-    exactly 1 absence to detect who just got flagged), not one replacing
-    the other.
+    The status condition is required so a node with one absence for an
+    unrelated reason isn't misread as a stripped-flag event. This "== 1"
+    strictness differs from _churn_state_machine's "== 0" presence filter;
+    both are needed at once (0 absences for who is present, 1 for who was
+    just flagged).
 
-    Entities are keyed the same way as _churn_state_machine: (fingerprint,
+    Entities are keyed as in _churn_state_machine: (fingerprint,
     service_type) under the tracked overlap rule when dedupe_on_service_type
     is set, else fingerprint alone.
 
-    Returns a DataFrame with columns [date, hour, stripped_count], one row
-    per (date, hour) that had at least one qualifying event -- snapshots
-    with none simply don't appear here; the caller fills those with 0 on
-    merge, since a snapshot with no stripped events is a real, valid zero.
-    Returns an empty frame (same columns) if consecutive_hourly_absences,
-    status, or fingerprint is missing from `df`.
+    Returns [date, hour, stripped_count], one row per qualifying (date, hour);
+    snapshots with none are absent and filled with 0 by the caller. Returns an
+    empty frame if consecutive_hourly_absences, status, or fingerprint is
+    missing.
     """
     empty = pd.DataFrame(columns=["date", "hour", "stripped_count"])
     if df is None or df.empty or "consecutive_hourly_absences" not in df.columns \
@@ -2058,57 +1965,34 @@ def _stripped_flag_counts(df, dedupe_on_service_type=False):
 def _churn_state_machine(df, dedupe_on_service_type=False):
     """
     Walk _chronological_snapshots(df) in order and classify every entity's
-    per-snapshot transition into new / disappeared / reconnected, relative
-    to the immediately preceding snapshot (never resetting at day
-    boundaries -- a node continuously active across midnight is neither new
-    nor disappeared there).
+    per-snapshot transition, relative to the previous snapshot and never
+    resetting at day boundaries.
 
-    State carried across the ENTIRE walk (never reset):
-      * prev_entities: the set of entities present in the previous snapshot
-        (starts empty) -- used for the disappeared/still-active transition.
-      * ever_seen: the set of every entity ever observed so far (starts
-        empty, only ever grows) -- used for the new-vs-reconnected split.
+    Two sets are carried across the whole walk: prev_entities (present in the
+    previous snapshot) and ever_seen (every entity observed so far). Per
+    snapshot, entities that just appeared split into "new" (never seen
+    before) and "reconnected" (seen earlier); prev_entities not in the
+    current snapshot are "disappeared". The first snapshot needs no special
+    case, since both sets start empty.
 
-    For each snapshot: appeared = current - prev_entities; of those,
-    appeared - ever_seen are "new" (truly first-ever) and appeared &
-    ever_seen are "reconnected" (seen before, at any earlier point).
-    disappeared = prev_entities - current. The very first snapshot needs no
-    special case: prev_entities and ever_seen both start empty, so every
-    entity present there is automatically "new" and nothing is
-    "disappeared"/"reconnected" -- exactly the spec's resolution for the
-    first-snapshot edge case falls out of the walk on its own.
+    Rate denominators are type-specific: new/reconnected divide by the
+    current snapshot's total, disappeared by the previous snapshot's total.
+    Rates are returned as non-negative fractions; the negative-for-departures
+    convention is applied only at plot time.
 
-    Rate denominators are type-specific: new/reconnected rates divide by
-    the CURRENT snapshot's total entity count (share of today's population
-    that just joined/came back); disappeared rate divides by the PREVIOUS
-    snapshot's total (share of that prior population no longer present).
-    All three rates are returned as plain non-negative fractions -- the
-    "negative for disappeared/reconnected" convention from the spec is a
-    plotting choice, applied only when building the rate plot, not stored
-    here, so the printed/aggregated numbers stay unambiguous positive rates.
-
-    A fourth column pair, stripped_count/stripped_rate, is merged on from
-    _stripped_flag_counts (a differently-filtered pass -- see that helper's
-    docstring) by (date, hour): missing snapshots become 0 (a real zero, not
-    missing data), and stripped_rate = stripped_count / prev_total (0 where
-    prev_total is 0) -- reusing this same table's own prev_total, exactly
-    mirroring disappeared_rate's formula, rather than tracking a second
-    population source. stripped is a diagnostic SUBSET of disappeared
-    (a stripped-flag node is typically also disappeared under the stricter
-    "==0" filter this function itself uses), not a mutually exclusive
-    category -- the two are expected to overlap.
+    A stripped_count/stripped_rate pair is merged on from
+    _stripped_flag_counts by (date, hour), with missing snapshots treated as
+    a real 0 and stripped_rate reusing prev_total. Stripped events are a
+    diagnostic subset of disappeared, not a mutually exclusive category.
 
     `dedupe_on_service_type=True` keys entities on (fingerprint,
-    service_type) instead of fingerprint alone -- the same overlap rule
-    `_prepare_uniformity_frame` uses -- so a node serving multiple service
-    types is tracked once per service type it serves, for the combined
-    "tracked" (all service types) run. Not needed for "network" or for a
-    single-service-type subset, where it's a no-op.
+    service_type) so a node serving several service types is counted once per
+    type; a no-op for single-service-type or network scopes.
 
-    Returns a DataFrame, one row per (date, hour) in chronological order,
-    with columns: date, hour, new_count, disappeared_count,
-    reconnected_count, stripped_count, new_rate, disappeared_rate,
-    reconnected_rate, stripped_rate, current_total, prev_total.
+    Returns one row per (date, hour) with columns: date, hour, new_count,
+    disappeared_count, reconnected_count, stripped_count, new_rate,
+    disappeared_rate, reconnected_rate, stripped_rate, current_total,
+    prev_total.
     """
     empty_cols = ["date", "hour", "new_count", "disappeared_count", "reconnected_count",
                   "stripped_count", "new_rate", "disappeared_rate", "reconnected_rate",
@@ -2121,7 +2005,7 @@ def _churn_state_machine(df, dedupe_on_service_type=False):
     if not snapshots:
         return pd.DataFrame(columns=empty_cols)
 
-    # Strict presence filter (point 0.3): only rows with zero consecutive
+    # Strict presence filter: only rows with zero consecutive
     # hourly absences count as "actually in this consensus", NOT the looser
     # <=1 ghost tolerance used elsewhere in this file. NaN (no data) is kept,
     # consistent with every other ghost filter's NaN handling.
@@ -2224,7 +2108,7 @@ def _churn_day_tick_positions(df_states, max_labels=15):
     return positions, days
 
 
-def _plot_churn_counts(df_states, output_path, title):
+def _plot_churn_counts(df_states, output_path):
     """
     Four solid lines (new/disappeared/reconnected/stripped), all plotted as
     plain absolute counts (none negated -- unlike the rate plot, this is not
@@ -2258,7 +2142,6 @@ def _plot_churn_counts(df_states, output_path, title):
     ax.set_xticklabels(tick_lab, rotation=45, ha="right", fontsize=8)
     ax.set_xlabel("Day")
     ax.set_ylabel("Entity count")
-    ax.set_title(title)
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -2267,7 +2150,7 @@ def _plot_churn_counts(df_states, output_path, title):
     print(f"    --> Saved plot: {output_path}")
 
 
-def _plot_churn_rates(df_states, output_path, title):
+def _plot_churn_rates(df_states, output_path):
     """
     Same x-axis/line structure as the count plot, but diverging: new rate
     positive, disappeared/reconnected/stripped rates negated (plotted below
@@ -2296,8 +2179,7 @@ def _plot_churn_rates(df_states, output_path, title):
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lab, rotation=45, ha="right", fontsize=8)
     ax.set_xlabel("Day")
-    ax.set_ylabel("Rate (new: ÷ current total; disappeared/stripped: ÷ previous total;\nreconnected: ÷ current total)")
-    ax.set_title(title)
+    ax.set_ylabel("Churn rate per snapshot")
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -2401,11 +2283,9 @@ def hsdir_churn_distributions(df, context_label):
     _print_churn_summary(df_states, context_label)
     _plot_churn_counts(
         df_states, os.path.join(base_dir, f"{context_label}_churn_count_per_hour.png"),
-        title=f"HSDir churn — counts per snapshot — {context_label}",
     )
     _plot_churn_rates(
         df_states, os.path.join(base_dir, f"{context_label}_churn_rate_per_hour.png"),
-        title=f"HSDir churn — rates per snapshot — {context_label}",
     )
 
     if context_label == "tracked" and "service_type" in df.columns:
@@ -2427,11 +2307,9 @@ def hsdir_churn_distributions(df, context_label):
             st_lower = st.lower()
             _plot_churn_counts(
                 sub_states, os.path.join(base_dir, f"{st_lower}_churn_count_per_hour.png"),
-                title=f"HSDir churn — counts per snapshot — {st}",
             )
             _plot_churn_rates(
                 sub_states, os.path.join(base_dir, f"{st_lower}_churn_rate_per_hour.png"),
-                title=f"HSDir churn — rates per snapshot — {st}",
             )
 
 
@@ -2472,32 +2350,26 @@ def _apply_ghost_filter(df):
 def _build_uptime_matrix(df, dedupe_on_service_type):
     """
     Build the snapshot x entity uptime matrix shared by both matrix variants,
-    over the FULL entity universe (every entity ever seen across the window --
-    the union), with three distinct cell states so that "not in this consensus
-    at all" is never conflated with "present but offline":
+    over the full entity universe (the union of every entity ever seen), with
+    three cell states so "absent from a consensus" is never conflated with
+    "present but offline":
 
-        0 = OFFLINE : entity appears in that consensus but not ACTIVE_IN_RING
-        1 = ACTIVE  : entity has an ACTIVE_IN_RING row in that consensus
-        2 = ABSENT  : entity has no row at all in that consensus (not listed --
-                      e.g. not born yet, already gone, or otherwise omitted)
+        0 = OFFLINE : listed in that consensus but not ACTIVE_IN_RING
+        1 = ACTIVE  : has an ACTIVE_IN_RING row in that consensus
+        2 = ABSENT  : has no row at all (not yet born, already gone, or omitted)
 
-    Earlier designs collapsed ABSENT into OFFLINE (both white), which made a
-    growing entity set look like a meaningless online/offline pattern (a
-    relay that simply did not exist yet read as "offline" for every prior
-    row). Keeping ABSENT as its own state lets the renderer color it
-    distinctly (see _render_uptime_matrix) so the genuine online/offline
-    signal of the relays actually in each consensus stays legible.
+    Keeping ABSENT distinct from OFFLINE lets the renderer colour it
+    separately, so a relay that simply did not exist yet doesn't read as
+    "offline" for every prior row.
 
     Returns (state_matrix, active_matrix, entities, snapshots):
-      * state_matrix : int array (n_snapshots, n_entities) with values 0/1/2
-                       as above -- drives rendering.
-      * active_matrix: int array (n_snapshots, n_entities), 1 iff ACTIVE else 0
-                       (ABSENT and OFFLINE both -> 0) -- the binary uptime
+      * state_matrix : int array (n_snapshots, n_entities) of 0/1/2, drives
+                       rendering.
+      * active_matrix: int array, 1 iff ACTIVE else 0 -- the binary uptime
                        sequence used for correlation clustering and
-                       identical-run detection, where the meaningful axis is
-                       simply "was this entity actively in the ring or not."
-      * entities     : union entity keys in first-appearance chronological
-                       order (column order for the status-only variant).
+                       identical-run detection.
+      * entities     : union entity keys in first-appearance order (column
+                       order for the status-only variant).
       * snapshots    : (date, hour) pairs in chronological order (row order).
     """
     work = df.copy()
@@ -2619,7 +2491,7 @@ def _identical_run_mask(matrix_ordered, min_run=5):
     return flagged
 
 
-def _render_uptime_matrix(matrix, output_path, title, red_mask=None):
+def _render_uptime_matrix(matrix, output_path, red_mask=None):
     """
     Render a snapshot x entity uptime matrix as an RGB bitmap from the
     three-state values produced by _build_uptime_matrix:
@@ -2643,7 +2515,6 @@ def _render_uptime_matrix(matrix, output_path, title, red_mask=None):
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.imshow(rgb, aspect="auto", interpolation="nearest", origin="upper")
-    ax.set_title(title)
     ax.set_xlabel("Entities (columns)")
     ax.set_ylabel("Consensuses (rows, earliest at top)")
     ax.set_xticks([])
@@ -2680,7 +2551,6 @@ def _uptime_matrix_for_slice(df, dedupe_on_service_type, out_dir, name_prefix, l
     _render_uptime_matrix(
         state_matrix,
         os.path.join(out_dir, f"{name_prefix}_uptime_matrix.png"),
-        title=f"Uptime matrix (status only) — {label}",
         red_mask=None,
     )
 
@@ -2693,7 +2563,6 @@ def _uptime_matrix_for_slice(df, dedupe_on_service_type, out_dir, name_prefix, l
     _render_uptime_matrix(
         state_ordered,
         os.path.join(out_dir, f"{name_prefix}_uptime_matrix_clustered.png"),
-        title=f"Uptime matrix (uptime-similarity clustered) — {label}",
         red_mask=red_mask,
     )
 
@@ -2829,7 +2698,7 @@ def _pooled_daily_durations(df, dedupe_on_service_type):
     return out
 
 
-def _plot_hourly_uptimes(days, avg, p85, p50, p15, output_path, title):
+def _plot_hourly_uptimes(days, avg, p85, p50, p15, output_path):
     """Four-series per-day uptime-duration plot with the specified styling."""
     x = list(range(len(days)))
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -2842,7 +2711,6 @@ def _plot_hourly_uptimes(days, avg, p85, p50, p15, output_path, title):
     ax.set_xticklabels(days, rotation=45, ha="right", fontsize=8)
     ax.set_xlabel("Day")
     ax.set_ylabel("Uptime duration (decimal hours)")
-    ax.set_title(title)
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -2875,7 +2743,6 @@ def _hourly_uptimes_for_slice(df, dedupe_on_service_type, out_dir, name_prefix, 
     _plot_hourly_uptimes(
         days, avg, p85, p50, p15,
         os.path.join(out_dir, f"{name_prefix}_hourly_uptimes.png"),
-        title=f"Daily uptime durations — {label}",
     )
 
     overall = float(np.mean(avg)) if avg else 0.0
@@ -2937,7 +2804,6 @@ def _onion_nested_hourly_uptimes(df, out_dir, st_lower, label):
     _plot_hourly_uptimes(
         days, avg, p85, p50, p15,
         os.path.join(out_dir, f"{st_lower}_onion_hourly_uptimes.png"),
-        title=f"Daily uptime durations (per-onion nested average) — {label}",
     )
 
     overall = float(np.mean(avg)) if avg else 0.0
@@ -3052,7 +2918,7 @@ def _format_entity_label(entity_id):
     return str(entity_id)
 
 
-def _sorted_rank_plot(counts, output_path, title, y_label):
+def _sorted_rank_plot(counts, output_path, y_label):
     """
     Sorted-rank plot: every entity's count, sorted ascending, plotted at
     x = rank (1..N), y = count, linear y-axis. This is NOT a categorical
@@ -3077,9 +2943,8 @@ def _sorted_rank_plot(counts, output_path, title, y_label):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(x, values, linestyle="-", color="black", linewidth=1.2)
-    ax.set_xlabel("Rank (entities sorted by count, ascending)")
+    ax.set_xlabel("Rank (ascending count)")
     ax.set_ylabel(y_label)
-    ax.set_title(title)
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
@@ -3126,7 +2991,6 @@ def _distinct_value_changes_report_and_plot(df, group_col, counted_col, label, o
 
     _sorted_rank_plot(
         counts.tolist(), output_path,
-        title=f"{label} — distinct {metric_label} per nickname (sorted rank)",
         y_label=f"Observed distinct {metric_label}",
     )
 
@@ -3155,8 +3019,6 @@ def _run_nickname_changes_distributions(df, context_label, out_dir, variants):
     if df.empty:
         print(f"[CHANGES-INFO] No rows survive the ghost filter for {context_label}; skipping.")
         return
-
-    dedupe_st = (context_label == "tracked")
 
     def run_scope(sub_df, label, filename_prefix, dedupe):
         # "Unnamed" is Tor's literal fallback nickname string when an
@@ -3188,7 +3050,7 @@ def _run_nickname_changes_distributions(df, context_label, out_dir, variants):
                 metric_label=metric_label,
             )
 
-    run_scope(df, context_label, context_label, dedupe_st)
+    run_scope(df, context_label, context_label, False)
 
     if context_label == "tracked" and "service_type" in df.columns:
         service_types = sorted(
@@ -3204,11 +3066,13 @@ def _run_nickname_changes_distributions(df, context_label, out_dir, variants):
 
 def sybil_relay_fingerprint_changes(df, context_label):
     """
-    Deliverable A. For `df` (network-wide or tracked, post-validate_sort_data
-    shape) and context_label ("network" or "tracked"): groups by nickname
-    (the (nickname, service_type) overlap-rule entity under "tracked"),
-    counts each entity's number of distinct fingerprint values across the
-    whole window, prints the top 5, and saves a sorted-rank plot to
+    For `df` (network-wide or tracked, post-validate_sort_data
+    shape) and context_label ("network" or "tracked"): groups by plain
+    nickname (no service-type dedup -- the general case is always computed
+    over the whole population regardless of context_label, identical in
+    shape for "network" and "tracked"), counts each entity's number of
+    distinct fingerprint values across the whole window, prints the top 5,
+    and saves a sorted-rank plot to
     analysis-results/sybil/fp_changes/{context_label}_fingerprint_changes.png.
 
     For context_label == "tracked", additionally repeats per service_type,
@@ -3224,7 +3088,7 @@ def sybil_relay_fingerprint_changes(df, context_label):
 
 def sybil_relay_family_id_changes(df, context_label):
     """
-    Deliverable B. Identical logic to sybil_relay_fingerprint_changes, with
+    Identical logic to sybil_relay_fingerprint_changes, with
     one substitution: counts distinct declared_family_id values per nickname
     instead of distinct fingerprint values. Saved to
     analysis-results/sybil/famID_changes/{context_label}_famID_changes.png
@@ -3240,7 +3104,7 @@ def sybil_relay_family_id_changes(df, context_label):
 
 def sybil_relay_ip_changes(df, context_label):
     """
-    Deliverable C. Same logic again, in two parallel variants per nickname:
+    Same logic again, in two parallel variants per nickname:
     distinct ip_address count, and distinct /24-subnet count (subnet derived
     via _to_24_subnet). Saved to analysis-results/sybil/ip_changes/ as
     {context_label}_ip_changes.png and {context_label}_subnet_24_changes.png
@@ -3310,25 +3174,20 @@ def _k_suffix_formatter():
 
 def _bpk_event_counts(df):
     """
-    Single shared per-descriptor scan over the ring-event DataFrame, feeding
-    all three deliverables so df_ring_events is grouped once, not three times.
+    Single shared per-descriptor scan over the ring-event DataFrame, so it is
+    grouped once for all the descriptor-hosting analyses rather than repeatedly.
 
-    Grouping unit -- the composite descriptor key (descriptor_id_b64,
-    onion_address), NOT descriptor_id_b64 alone. In the real data the same
-    descriptor_id_b64 is logged for more than one onion_address (a bpk
-    "collision": ~35% of bare bpks map to 2+ onions, many at the SAME
-    timestamp -- cryptographically impossible for a true V3 blinded key, so a
-    defect in how the id was generated/logged upstream). A true blinded key is
-    derived from one onion's identity, so pairing the id with onion_address
-    restores the intended one-descriptor-per-onion unit: each composite entity
-    belongs to exactly one onion and therefore exactly one service_type,
-    which is what makes the per-service-type silent-failure counts partition
-    cleanly and sum to the tracked totals. The composite is referred to as a
-    "descriptor" in output labels (a (bpk, onion) pair is one descriptor
-    instance).
+    Grouping unit is the composite descriptor key (descriptor_id_b64,
+    onion_address), not descriptor_id_b64 alone: in the real data one
+    descriptor_id_b64 is logged under multiple onion_addresses (a bpk
+    "collision", impossible for a true V3 blinded key and hence an upstream
+    defect). Pairing the id with onion_address restores one descriptor per
+    onion, so each composite belongs to one service_type and the
+    per-service-type counts partition cleanly. Output labels call a
+    (bpk, onion) pair a "descriptor".
 
-    Returns a DataFrame indexed by a composite key (a (descriptor_id_b64,
-    onion_address) tuple, index name '_descriptor_key') with columns:
+    Returns a DataFrame indexed by the composite key (index name
+    '_descriptor_key') with columns:
       * uploads             total UPLOADED rows
       * failed_uploads      total FAILED rows whose reason == UPLOAD_REJECTED
       * fetches             total RECEIVED rows
@@ -3336,9 +3195,8 @@ def _bpk_event_counts(df):
       * failed_upload_hours distinct (date, hour) buckets with >=1
                             FAILED+UPLOAD_REJECTED
       * fetched_hours       distinct (date, hour) buckets with >=1 RECEIVED
-    Every composite descriptor that appears in `df` under any action gets a
-    row (missing action categories are 0), so downstream has/never logic sees
-    every descriptor.
+    Every descriptor appearing under any action gets a row (missing
+    categories are 0).
     """
     work = df.copy()
     action = work["action"].astype(str)
@@ -3412,7 +3270,6 @@ def _overlaid_uf_histogram(upload_vals, fetch_vals, output_path, title, x_label,
         ax.hist(fa, bins=bins, color="green", alpha=0.55, label=failed_label)
     ax.set_xlabel(x_label)
     ax.set_ylabel("Number of descriptors")
-    ax.set_title(title)
     ax.yaxis.set_major_formatter(_k_suffix_formatter())
     ax.legend(loc="upper right")
     fig.tight_layout()
@@ -3443,7 +3300,7 @@ def _iter_ring_scopes(df, context_label):
 
 def bpks_uf_persistance(df, context_label):
     """
-    Deliverable A. Per-bpk TOTAL upload and fetch event counts, drawn as an
+    Per-bpk TOTAL upload and fetch event counts, drawn as an
     overlaid pair of histograms (uploads-per-bpk blue, fetches-per-bpk
     orange) over all bpks -- i.e. how many bpks had N uploads vs. how many
     had N fetches, NOT one bar per bpk. Saved to
@@ -3451,7 +3308,7 @@ def bpks_uf_persistance(df, context_label):
     and, under "tracked", once per service_type as
     {service_type_lower}_bpks_upload_fetch_persistance.png.
 
-    failed_uploads is computed here (it feeds Deliverable C) but is not a
+    failed_uploads is computed here (it feeds silent-failure detection) but is not a
     third plotted series -- the reference two-series design is uploads vs.
     fetches only, and a plotted failed-upload series was found to clutter
     the figure; a short failed-upload summary is printed instead.
@@ -3484,17 +3341,17 @@ def bpks_uf_persistance(df, context_label):
 
 def bpks_hour_uf_persistance(df, context_label):
     """
-    Deliverable B. Per-bpk DISTINCT (date, hour) bucket counts: for each bpk,
+    Per-bpk DISTINCT (date, hour) bucket counts: for each bpk,
     how many distinct hourly consensus snapshots it had at least one upload
     in (uploaded_hours) vs. at least one fetch in (fetched_hours). "Hour
     bucket" = a distinct (date, hour) pair across the whole window, NOT one
     of 24 recurring hour-of-day slots -- a bpk uploaded at 14:00 on ten days
     counts as ten distinct buckets, not one. Same overlaid-histogram design
-    as Deliverable A. Saved to
+    as the total-counts variant. Saved to
     analysis-results/bpks/uf_persistance/{context_label}_bpks_upload_fetch_hour_persistance.png
     (and per service_type under "tracked").
 
-    Shares the _bpk_event_counts scan with Deliverable A so df_ring_events is
+    Shares the _bpk_event_counts scan with the total-counts variant so df_ring_events is
     grouped once; kept a separate public function because its metric (distinct
     hour buckets) genuinely differs from A's (total event counts).
     """
@@ -3522,7 +3379,7 @@ def bpks_hour_uf_persistance(df, context_label):
         )
 
 
-def _plot_silent_failure_bars(categories_by_label, output_path, title):
+def _plot_silent_failure_bars(categories_by_label, output_path):
     """
     Grouped bar chart of the two silent-failure categories. For a single
     scope, `categories_by_label` = {label: (uploaded_never_fetched,
@@ -3544,7 +3401,6 @@ def _plot_silent_failure_bars(categories_by_label, output_path, title):
     ax.set_xticks(list(x))
     ax.set_xticklabels(cat_names)
     ax.set_ylabel("Number of descriptors")
-    ax.set_title(title)
     if n > 1:
         ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
@@ -3575,52 +3431,26 @@ def _write_silent_failure_debug_csv(counts, output_path):
 
 def bpks_not_upload_fetch_distributions(df, context_label):
     """
-    Deliverable C. Silent-failure detection over per-bpk upload/fetch
-    presence. Two categories per bpk:
+    Silent-failure detection over per-bpk upload/fetch presence. Two
+    categories per bpk:
       * uploaded-never-fetched : has_upload and not has_fetch
       * fetched-never-uploaded : has_fetch and not has_upload
 
-    A bpk (blinded public key) is derived from exactly ONE onion address,
-    and each onion belongs to exactly ONE service_type -- so a bpk's
-    has_upload / has_fetch status is a property of the descriptor itself,
-    judged over ALL of that bpk's events, and its service_type is a single
-    fixed label. The per-service-type breakdown therefore attributes each
-    globally-judged bpk to its own service_type; it does NOT re-decide
-    upload/fetch presence from only that service type's rows. This guarantees
-    the per-type category counts partition the bpks and SUM to the tracked
-    totals. (An earlier version filtered events per service type before
-    judging presence, which let a single bpk be double-counted across types
-    and broke that reconciliation.)
+    A bpk (blinded public key) derives from one onion address, and each onion
+    has one service_type, so has_upload/has_fetch is judged over all of a
+    bpk's events and its service_type is fixed. The per-service-type
+    breakdown attributes each globally-judged bpk to its own service_type
+    rather than re-deciding presence from that type's rows alone, so per-type
+    counts partition the bpks and sum to the tracked totals.
 
-    Data-integrity check: because "a bpk spans two service types" is
-    semantically impossible for valid data (a descriptor can't belong to two
-    different onions/experiments at once), any bpk observed under more than
-    one service_type -- or more than one onion_address -- is reported as a
-    data-integrity warning rather than silently modeled around. If the data
-    is clean this prints nothing; if it fires, the per-type sums may not
-    reconcile and the offending bpks should be investigated upstream.
+    Data-integrity check: any bpk observed under more than one service_type
+    or onion_address is reported as a warning (it should be impossible for
+    valid data); if it fires, per-type sums may not reconcile.
 
-    Methodological note (this project's own framing, not a citation): for
-    arbitrary public V3 onions "uploaded but never fetched" is the expected
-    common case -- most onion services are lightly used and any one
-    monitoring node sees only a fraction of the responsible HSDirs, so an
-    upload without a fetch usually just means nobody asked this node. THIS
-    dataset differs: the onions here are the experiment's own targeted/owned
-    and probed services (STATIC_CONTROL / EPHEMERAL_VARIABLE /
-    THIRD_PARTY_PROBE), which the experiment itself is expected to probe/fetch
-    by design -- so an uploaded-never-fetched bpk is a more meaningful anomaly
-    signal here (the probing side may have failed to reach the descriptor)
-    than for a general crawl. Fetched-never-uploaded is odd almost by
-    construction (a fetch implies some upload happened somewhere) and more
-    likely reflects a monitoring gap -- missing the upload snapshot -- than a
-    real protocol anomaly. Both are reported as signals/caveats, not asserted
-    as confirmed failures.
-
-    Prints per-category absolute count and percentage of unique bpks. When
-    both categories are empty for a scope, skips the plot, prints a clear
-    "no signal" notice, and writes a per-bpk diagnostic CSV. Under "tracked",
-    repeats per service_type, combining the per-type category counts into one
-    clustered grouped-bar figure (empty-per-type checked independently).
+    Prints per-category count and percentage of unique bpks. When both
+    categories are empty for a scope, skips the plot, prints a "no signal"
+    notice, and writes a per-bpk diagnostic CSV. Under "tracked", repeats per
+    service_type into one clustered grouped-bar figure.
     """
     if df is None or df.empty:
         print(f"[BPK-ERROR] Missing/empty ring-event data for '{context_label}'.")
@@ -3687,7 +3517,6 @@ def bpks_not_upload_fetch_distributions(df, context_label):
         _plot_silent_failure_bars(
             {context_label: (unf, fnu)},
             os.path.join(out_dir, f"{context_label}_bpks_not_upload_fetch.png"),
-            title=f"Silent-failure descriptor categories — {context_label}",
         )
 
     # --- Per-service-type: attribute each globally-flagged bpk to its own
@@ -3732,7 +3561,6 @@ def bpks_not_upload_fetch_distributions(df, context_label):
             _plot_silent_failure_bars(
                 combined,
                 os.path.join(out_dir, "service_types_bpks_not_upload_fetch.png"),
-                title="Silent-failure descriptor categories by service type — tracked",
             )
 
 
@@ -3743,8 +3571,8 @@ def bpks_not_upload_fetch_distributions(df, context_label):
 # `declared_family` field and classifies focus nodes by the declared-family-ID
 # status of their confirmed mutual neighbors. Two deliverables share one graph
 # per scope:
-#   * Deliverable A (no-ID-focused):   focus = nodes with declared_family_id "None"
-#   * Deliverable B (with-ID-focused): focus = nodes with a declared_family_id F,
+#   * No-ID-focused:   focus = nodes with declared_family_id "None"
+#   * With-ID-focused: focus = nodes with a declared_family_id F,
 #                                      excluding same-F neighbors first
 # Each produces three mutually-exclusive categories (mixed / only-with-ID /
 # only-without-ID). Per-day plots + per-day averages, plus a month-wide
@@ -3763,7 +3591,7 @@ _UNDECLARED_CATEGORY_LABELS = {
 
 
 def _undeclared_ghost_filter(df):
-    """Stricter == 0 presence filter (NaN kept), per point 1.6."""
+    """Stricter == 0 presence filter (NaN kept)."""
     if "consecutive_hourly_absences" not in df.columns:
         return df
     cha = pd.to_numeric(df["consecutive_hourly_absences"], errors="coerce")
@@ -3777,7 +3605,7 @@ def _build_mutual_family_graph(scope_df):
 
     Node population: every distinct fingerprint present as its own row in
     scope_df. A fingerprint's declared_family is the UNION of every list
-    observed for it across all rows in the scope (per §2's confirmed
+    observed for it across all rows in the scope (confirmed
     union resolution), self-references dropped.
 
     A mutual edge A<->B exists iff B is in A's family union AND A is in B's
@@ -3822,7 +3650,7 @@ def _scope_family_id_map(scope_df, most_recent=False):
 
     most_recent=False (per-day): a day's rows are effectively one status per
     node; take the first non-null seen (they don't vary meaningfully within a
-    day). most_recent=True (month-wide, §5): a node's ID can change across the
+    day). most_recent=True (month-wide): a node's ID can change across the
     month, so use the most-recently-observed value -- scope_df is already in
     chronological order post validate_sort_data, so the last row wins.
     """
@@ -3839,7 +3667,7 @@ def _scope_family_id_map(scope_df, most_recent=False):
 
 def _classify_node_no_id(node, adjacency, id_map):
     """
-    Deliverable A classification for a focus node (declared_family_id "None").
+    No-ID-focused classification for a focus node (declared_family_id "None").
     Returns one of _UNDECLARED_CATEGORIES, or None if the node has zero mutual
     neighbors (excluded from all metrics).
     """
@@ -3857,7 +3685,7 @@ def _classify_node_no_id(node, adjacency, id_map):
 
 def _classify_node_with_id(node, adjacency, id_map, focus_id):
     """
-    Deliverable B classification for a focus node whose own family ID is
+    With-ID-focused classification for a focus node whose own family ID is
     focus_id (!= "None"). Same-family-ID mutual neighbors are excluded first
     (an intra-family mutual link is expected, not an undeclared signal).
     Returns one of _UNDECLARED_CATEGORIES, or None if zero remaining neighbors.
@@ -3923,7 +3751,7 @@ def _undeclared_counts_for_scope(scope_df, weight_restrict_fps=None,
 
     weight_restrict_fps: for a per-service-type breakdown, the set of
       fingerprints that served that service type in the scope -- only these
-      are classified/counted, but the graph is the FULL scope graph (§2
+      are classified/counted, but the graph is the FULL scope graph (
       scoping resolution). None -> classify all present nodes with the
       overlap-rule weight (tracked combined) or weight 1 (network).
     """
@@ -3952,7 +3780,7 @@ def _undeclared_counts_for_scope(scope_df, weight_restrict_fps=None,
     return counts_no_id, counts_with_id
 
 
-def _plot_undeclared(days, per_day_counts, output_path, title):
+def _plot_undeclared(days, per_day_counts, output_path):
     """
     One solid line per category (mixed / only-with-ID / only-without-ID) over
     days, absolute counts. per_day_counts: list aligned with `days`, each a
@@ -3968,7 +3796,6 @@ def _plot_undeclared(days, per_day_counts, output_path, title):
     ax.set_xticklabels(days, rotation=45, ha="right", fontsize=8)
     ax.set_xlabel("Day")
     ax.set_ylabel("Node count")
-    ax.set_title(title)
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1))
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -4029,12 +3856,10 @@ def _run_undeclared_scope(df, label, filename_prefix, out_dir,
 
     _plot_undeclared(
         days, per_day_no_id,
-        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_no_ID.png"),
-        title=f"Undeclared families (no-ID-focused) — {label}")
+        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_no_ID.png"))
     _plot_undeclared(
         days, per_day_with_id,
-        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_with_ID.png"),
-        title=f"Undeclared families (with-ID-focused) — {label}")
+        os.path.join(out_dir, f"{filename_prefix}_undeclared_families_with_ID.png"))
 
     n_days = len(days)
     print(f"\n[UNDECLARED] {label} — per-day averages ({n_days} days)")
@@ -4053,19 +3878,19 @@ def _run_undeclared_scope(df, label, filename_prefix, out_dir,
 
 def undeclared_families_distribution(df, context_label):
     """
-    Undeclared-family mutual-graph analysis (§2-§5). Builds a per-day mutual
+    Undeclared-family mutual-graph analysis. Builds a per-day mutual
     (bidirectional) family graph from `declared_family`, classifies focus
     nodes by their mutual neighbors' declared_family_id status into three
     categories, and produces:
-      * Deliverable A (no-ID-focused): focus = declared_family_id == "None".
-      * Deliverable B (with-ID-focused): focus = declared_family_id != "None",
+      * No-ID-focused: focus = declared_family_id == "None".
+      * With-ID-focused: focus = declared_family_id != "None",
         same-family-ID neighbors excluded first.
     Per-day line plots (one per deliverable) + per-day averages, plus a
     month-wide whole-scope six-count printout (no plot).
 
     General case runs for both "network" and "tracked". For "tracked",
     repeats per service_type using the FULL day's/month's graph but
-    classifying only nodes that served that service type (§2 scoping); the
+    classifying only nodes that served that service type; the
     combined "tracked" run applies the overlap rule at tally time (a node
     serving N service types contributes N to its category).
 
@@ -4102,8 +3927,8 @@ def undeclared_families_distribution(df, context_label):
 
 
 # ---------------------------------------------------------------------------
-# HSDir action-rate distribution (Deliverable A) and stripped-flag churn
-# (Deliverable B)
+# HSDir action-rate distribution and stripped-flag churn
+#
 # ---------------------------------------------------------------------------
 
 def _action_overlap_key(df, id_col, dedupe_on_service_type):
@@ -4219,12 +4044,12 @@ def _run_action_rate_scope(scope_df, label, dedupe_on_service_type):
     if scope_df is None or scope_df.empty:
         print(f"    [{label}] no qualifying events; skipping.")
         return
-    # Point 1: fingerprint-based network aggregate.
+    # Fingerprint-based network aggregate.
     agg_hour = _aggregate_action_rates(scope_df, "hsdir_fingerprint", "hour", dedupe_on_service_type)
     agg_day = _aggregate_action_rates(scope_df, "hsdir_fingerprint", "date", dedupe_on_service_type)
     _print_action_rates(label, agg_hour, agg_day, "fingerprint-aggregate")
 
-    # Point 2: onion-averaged view (never dedupes on service type -- an onion
+    # Onion-averaged view (never dedupes on service type -- an onion
     # belongs to one service type; the average is over onions, not entities).
     onion_hour = _onion_averaged_action_rates(scope_df, "hsdir_fingerprint", "hour", False)
     onion_day = _onion_averaged_action_rates(scope_df, "hsdir_fingerprint", "date", False)
@@ -4233,7 +4058,7 @@ def _run_action_rate_scope(scope_df, label, dedupe_on_service_type):
 
 def hsdir_action_rate_distribution(df, context_label):
     """
-    Deliverable A. Distribution of ring-event `action` types as rates, over
+    Distribution of ring-event `action` types as rates, over
     df_ring_events. context_label is "tracked" in practice (ring events exist
     only for tracked targets); the parameter is kept for interface parity but
     there is no "network" branch.
@@ -4279,7 +4104,7 @@ def hsdir_action_rate_distribution(df, context_label):
 
 
 # ---------------------------------------------------------------------------
-# Deliverable B — stripped-flag churn
+# Stripped-flag churn
 # ---------------------------------------------------------------------------
 
 # The six non-HSDir flags whose presence at the moment of stripping is
@@ -4337,48 +4162,36 @@ def _run_stripped_flag_scope(stripped_df, label):
     presence_with_day = presence.copy()
     presence_with_day["date"] = kept_df["date"].values
     days = _chronological_days(kept_df)
-    if days:
-        print(f"    [{label}] per-day flag presence at strip time:")
-        for day in days:
-            day_mask = presence_with_day["date"] == day
-            d_n = int(day_mask.sum())
-            if d_n == 0:
-                continue
-            parts = ", ".join(
-                f"{f}: {presence_with_day.loc[day_mask, f].mean():.0%}"
-                for f in _STRIPPED_CHURN_FLAGS)
-            print(f"        {day} (n={d_n}): {parts}")
+    # if days:
+    #     print(f"    [{label}] per-day flag presence at strip time:")
+    #     for day in days:
+    #         day_mask = presence_with_day["date"] == day
+    #         d_n = int(day_mask.sum())
+    #         if d_n == 0:
+    #             continue
+    #         parts = ", ".join(
+    #             f"{f}: {presence_with_day.loc[day_mask, f].mean():.0%}"
+    #             for f in _STRIPPED_CHURN_FLAGS)
+    #         print(f"        {day} (n={d_n}): {parts}")
 
 
 def hsdir_stripped_flag_churn_distribution(df, context_label):
     """
-    Deliverable B. Characterizes what OTHER flags a node still carries at the
-    moment its HSDir flag is stripped -- a different question from
-    hsdir_churn_distributions' stripped-churn series (which counts how OFTEN
-    stripping happens over time); this one asks what else is going on flag-wise
-    when it happens.
+    Characterizes what other flags a node still carries at the moment its
+    HSDir flag is stripped -- distinct from the stripped-churn series (which
+    counts how often stripping happens); this asks what else is going on
+    flag-wise when it does.
 
-    Metric choice -- SINGLE-SNAPSHOT PRESENCE (documented per §3.2): for each
-    STRIPPED_HSDIR_FLAG row, check whether each of the six non-HSDir flags
-    (Fast, Guard, Running, Stable, V2Dir, Valid) is still present in that same
-    row's flags list, and report the percentage of stripped-events where each
-    is present. Chosen over the temporal before/after approach because the
-    diagnostic goal is to distinguish an HSDir-specific loss (other flags
-    still present -> only HSDir went) from a broader simultaneous flag-loss
-    event (multiple flags gone at once) -- that distinction is a property of
-    the strip-moment snapshot itself, read directly from one row, with no
-    dependence on a prior non-stripped observation (which may not exist for a
-    node first seen already-stripped).
+    For each STRIPPED_HSDIR_FLAG row, checks whether each of the six non-HSDir
+    flags (Fast, Guard, Running, Stable, V2Dir, Valid) is still present in
+    that row and reports the percentage of stripped events where each is. Read
+    from the single strip-moment snapshot, which distinguishes an
+    HSDir-specific loss (other flags present) from a broader simultaneous
+    flag-loss, without depending on a prior observation that may not exist.
 
-    Filter: status == "STRIPPED_HSDIR_FLAG" (the simpler of the two equivalent
-    filters; verified against the sample that every such row has
-    consecutive_hourly_absences == 1, so the status-only filter matches the
-    earlier combined convention).
-
-    Prints month-wide and per-day presence % (terminal only -- no plot; the
-    aggregate percentages are fully conveyed by the printout, so a chart would
-    only restate them). For "tracked", repeats per service_type (overlap rule
-    on (fingerprint, service_type)).
+    Filter: status == "STRIPPED_HSDIR_FLAG". Prints month-wide and per-day
+    presence % (no plot). For "tracked", repeats per service_type (overlap
+    rule on (fingerprint, service_type)).
     """
     if df is None or df.empty:
         print(f"[FLAG-CHURN-ERROR] Missing/empty data for '{context_label}'.")
@@ -4458,6 +4271,7 @@ if __name__ == "__main__":
         ip_sybil_distributions(df_net_consensus, "network")
         ip_sybil_distributions(df_track_consensus, "tracked")
         service_type_overlap_diagnostic(df_track_consensus, "tracked")
+        service_type_overlap_diagnostic(df_rot_track, "rotated_tracked")
         family_id_entity_drops_distributions(df_net_consensus, "network")
         family_id_entity_drops_distributions(df_track_consensus, "tracked")
         ip_entity_drops_distributions(df_net_consensus, "network")
@@ -4479,13 +4293,13 @@ if __name__ == "__main__":
         # == 0 ghost filter internally, so it takes the raw DataFrames.
         undeclared_families_distribution(df_net_consensus, "network")
         undeclared_families_distribution(df_track_consensus, "tracked")
-        # Deliverable A: action-rate distribution on ring events (tracked-only).
+        # Action-rate distribution on ring events (tracked-only).
         if df_ring_events is not None:
             hsdir_action_rate_distribution(df_ring_events, "tracked")
         else:
             print("[ANALYSIS-WARNING] ring-event DataFrame unavailable; "
                   "skipping action-rate distribution.")
-        # Deliverable B: stripped-flag churn on the consensus DataFrames.
+        # Stripped-flag churn on the consensus DataFrames.
         hsdir_stripped_flag_churn_distribution(df_net_consensus, "network")
         hsdir_stripped_flag_churn_distribution(df_track_consensus, "tracked")
         # Uptime-matrix and hourly-uptime-duration analyses; both apply the
